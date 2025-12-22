@@ -5,5 +5,6 @@ import type { Account } from '@domain/accounts/Account'
 export interface AccountRepository {
   getAll(): Promise<Account[]>
   getByCode(code: number): Promise<Account>
-  updateBalance(accountCode: number, newBalance: number): Promise<void>
+  getBalance(companyId: string, accountCode: number): Promise<number>
+  applyBalanceDelta(companyId: string, accountCode: number, delta: number): Promise<void>
 }

@@ -10,13 +10,7 @@ export const validateSaleAccount = (mapping: SaleAccountConfig, accountsCatalog:
   validateAccount('vatAccount', mapping.vatAccount, accountsCatalog, AccountType.LIABILITY)
 
   if (event?.includesCost) {
-    if (!mapping.cogsAccount) throw new Error('cogsAccount is required when includesCost = true')
-    if (!mapping.inventoryAccount) throw new Error('inventoryAccount is required when includesCost = true')
-
-    validateAccount('cogsAccount', mapping.cogsAccount, accountsCatalog, AccountType.EXPENSE)
-    validateAccount('inventoryAccount', mapping.inventoryAccount, accountsCatalog, AccountType.ASSET)
-
-    if (!event.quantity) throw new Error('quantity must be provided when includesCost = true')
-    if (!event.unitCost) throw new Error('unitCost must be provided when includesCost = true')
+    if (mapping.cogsAccount) validateAccount('cogsAccount', mapping.cogsAccount, accountsCatalog, AccountType.EXPENSE)
+    if (mapping.inventoryAccount) validateAccount('inventoryAccount', mapping.inventoryAccount, accountsCatalog, AccountType.ASSET)
   }
 }

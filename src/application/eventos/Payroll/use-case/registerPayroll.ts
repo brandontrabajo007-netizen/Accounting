@@ -23,37 +23,30 @@ export const makeRegisterPayroll = ({ accountRepository, payrollAccountMappingRe
   const registerPayroll = async (input: PayrollEventInput) => {
     const date = input.date ? new Date(input.date) : new Date()
 
-    // 1️⃣ Catálogo contable completo
     const catalog = await accountRepository.getAll()
 
-    // 2️⃣ Mapping de cuentas
     const mapping = await payrollAccountMappingRepository.getPayrollAccountMappingByCompanyId(input.companyId)
 
-    // 3️⃣ Construir evento de dominio
     const payrollEvent: PayrollEvent = {
       type: EventType.PAYROLL,
       companyId: input.companyId,
-      description: input.description,
-      amount: input.amount,
+      description: input.description || 'Nómina pendiente',
+      amount: input.amount ?? 0,
       paymentMethod: input.paymentMethod,
       beneficiary: input.beneficiary,
       date,
       toJournalEntry: (config) => generatePayrollJournalEntry(payrollEvent, config, catalog),
     }
 
-    // 4️⃣ Validación de cuentas
     validatePayrollAccount(mapping, catalog, payrollEvent)
 
-    // 5️⃣ Generar asiento
     let journalEntry = generatePayrollJournalEntry(payrollEvent, mapping, catalog)
+    journalEntry = { ...journalEntry, eventType: EventType.PAYROLL }
 
-    // 6️⃣ Guardar asiento
     await journalEntryRepository.save(journalEntry)
 
-    // 7️⃣ Procesar movimientos
     journalEntry = await processJournalEntry.process(journalEntry.id)
 
-    // 8️⃣ Presentar salida consistente
     return presentJournalEntry(journalEntry, catalog)
   }
 

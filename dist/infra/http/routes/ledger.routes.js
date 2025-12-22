@@ -9,15 +9,16 @@ const JournalEntryStatus_1 = require("@domain/journal-entries/JournalEntryStatus
 const LedgerMovementModel_1 = require("@infra/persistence/mongo/models/LedgerMovementModel");
 const express_1 = __importDefault(require("express"));
 const dependencies_1 = require("../dependencies");
+const auth_1 = require("../middleware/auth");
 const router = express_1.default.Router();
 exports.ledgerRoutes = router;
 // ---------------------------------------------------------
 // 1) Obtener saldos reales por empresa
 // GET /ledger/:companyId
 // ---------------------------------------------------------
-router.get('/:companyId', async (req, res) => {
+router.get('/', auth_1.authMiddleware, async (req, res) => {
     try {
-        const { companyId } = req.params;
+        const companyId = req.user.companyId;
         const balances = await dependencies_1.ledgerBalanceRepository.getAllByCompany(companyId);
         return res.json({
             status: 'ok',

@@ -114,6 +114,8 @@ Frases válidas (indicadores de costo):
 “costo…”
 “unit cost…” (si aparece)
 “coste…”
+“me cuesta…”
+“me costaron…”
 Si aparece cualquiera de estas, includesCost = true.
 Si no aparece ninguna indicación de costo → includesCost = false.
 

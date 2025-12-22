@@ -1,9 +1,10 @@
 // src/infra/http/routes/ledger.routes.ts
 
 import { JournalEntryStatus } from '@domain/journal-entries/JournalEntryStatus'
-import { LedgerMovementMongoModel } from '@infra/persistence/mongo/models/LedgerMovementModel'
 import express from 'express'
-import { journalEntryRepository, ledgerBalanceRepository } from '../dependencies'
+import { LedgerMovementMongoModel } from '@infra/persistence/mongo/models/LedgerMovementModel'
+import { accountRepository, journalEntryRepository } from '../dependencies'
+import { authMiddleware } from '../middleware/auth'
 
 const router = express.Router()
 
@@ -11,11 +12,16 @@ const router = express.Router()
 // 1) Obtener saldos reales por empresa
 // GET /ledger/:companyId
 // ---------------------------------------------------------
-router.get('/:companyId', async (req, res) => {
+router.get('/', authMiddleware, async (req, res) => {
   try {
-    const { companyId } = req.params
+    const companyId = req.user.companyId
 
-    const balances = await ledgerBalanceRepository.getAllByCompany(companyId)
+    const accounts = await accountRepository.getAll()
+    const balances = accounts.map((account) => ({
+      accountCode: account.code,
+      accountName: account.name,
+      balance: account.currentBalanceByCompany?.[companyId] ?? 0,
+    }))
 
     return res.json({
       status: 'ok',

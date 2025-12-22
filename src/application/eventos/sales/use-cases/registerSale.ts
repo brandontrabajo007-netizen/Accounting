@@ -3,17 +3,13 @@
 import { EventType } from '@domain/events/EventType.enum'
 import { generateSaleJournalEntry } from '@domain/events/sale/generateSaleJournalEntry'
 import type { SaleEvent } from '@domain/events/sale/SaleEvent'
-// Validaciones
 import { validateSaleAccount } from '@domain/events/sale/validateSaleAccount'
 import type { JournalEntry } from '@domain/journal-entries/JournalEntry'
 import { JournalEntryStatus } from '@domain/journal-entries/JournalEntryStatus'
-// Puertos (Repositorios)
 import type { AccountRepository } from '../../../shared/ports/AccountRepository'
 import type { JournalEntryRepository } from '../../../shared/ports/JournalEntryRepository'
 import type { SaleEventInput } from '../data/SaleEventInput'
 import type { SaleAccountMappingRepository } from '../ports/SaleAccountMappingRepository'
-
-// Presentador
 import { presentJournalEntry } from '../presenters/presentJournalEntry'
 
 export interface MakeRegisterSaleDeps {
@@ -25,66 +21,37 @@ export interface MakeRegisterSaleDeps {
 
 export const makeRegisterSale = ({ accountRepository, saleAccountMappingRepository, journalEntryRepository, processJournalEntry }: MakeRegisterSaleDeps) => {
   const registerSale = async (input: SaleEventInput) => {
-    // -------------------------------------------------------
-    // 1️ NORMALIZACIÓN DE CAMPOS BÁSICOS
-    // -------------------------------------------------------
     const date = input.date ? new Date(input.date) : new Date()
     const includesVAT = input.includesVAT ?? false
     const includesCost = input.includesCost ?? false
 
-    // -------------------------------------------------------
-    // 2️ COMPLETAR CAMPOS FALTANTES (REGLAS DE NEGOCIO)
-    // -------------------------------------------------------
+    // Completar faltantes
+    let quantity = input.quantity ?? 0
+    let unitPrice = input.unitPrice ?? null
+    let totalAmount = input.totalAmount ?? null
 
-    let { totalAmount, unitPrice, quantity } = input
-
-    // Si falta quantity → no se puede continuar
-    if (!quantity || quantity <= 0) {
-      throw new Error('No se puede registrar la venta: falta la cantidad.')
+    if (unitPrice != null && quantity > 0 && totalAmount == null) {
+      totalAmount = quantity * unitPrice
     }
-
-    // Si falta unitPrice pero sí hay totalAmount → calcular unitPrice
-    if (!unitPrice && totalAmount != null) {
+    if (totalAmount != null && quantity > 0 && unitPrice == null) {
       unitPrice = Math.round(totalAmount / quantity)
     }
 
-    // Si falta totalAmount pero sí hay unitPrice → calcular totalAmount
-    if (totalAmount == null && unitPrice != null) {
-      totalAmount = quantity * unitPrice
-    }
+    quantity = quantity > 0 ? quantity : 0
+    unitPrice = unitPrice ?? 0
+    totalAmount = totalAmount ?? 0
 
-    // Después de intentar completar, validar
-    if (unitPrice == null || totalAmount == null) {
-      throw new Error('No se puede registrar la venta: faltan datos de precio (unitPrice o totalAmount).')
-    }
-    // -------------------------------------------------------
-    // 3️ VALIDACIONES FINALES
-    // -------------------------------------------------------
+    const description = input.description && typeof input.description === 'string' ? input.description : 'Venta pendiente'
 
-    if (!input.description || typeof input.description !== 'string') {
-      throw new Error('Description is required and must be a string.')
-    }
-
-    if (includesCost && (!input.unitCost || input.unitCost <= 0)) {
-      throw new Error('includesCost=true pero no se proporcionó unitCost válido.')
-    }
-
-    // -------------------------------------------------------
-    // 4️ OBTENER CONFIG CONTABLE
-    // -------------------------------------------------------
     const accountsCatalog = await accountRepository.getAll()
-
     const accountMapping = await saleAccountMappingRepository.getSaleAccountMappingByCompanyId(input.companyId)
 
-    // -------------------------------------------------------
-    // 5️ MAPEO A EVENTO DE DOMINIO
-    // -------------------------------------------------------
     const saleEvent: SaleEvent = {
       type: EventType.SALE,
       companyId: input.companyId,
-      description: input.description,
+      description,
       totalAmount,
-      amount: includesVAT ? Math.round(totalAmount / 1.19) : totalAmount,
+      amount: includesVAT && totalAmount > 0 ? Math.round(totalAmount / 1.19) : totalAmount,
       date,
       includesVAT,
       includesCost,
@@ -94,36 +61,15 @@ export const makeRegisterSale = ({ accountRepository, saleAccountMappingReposito
       toJournalEntry: (config) => generateSaleJournalEntry(saleEvent, config, accountsCatalog),
     }
 
-    // -------------------------------------------------------
-    // 6️ VALIDAR CONFIG PROPORCIONADA
-    // -------------------------------------------------------
+    // Validar solo si hay cuentas; no lanzar por faltantes de costo
     validateSaleAccount(accountMapping, accountsCatalog, saleEvent)
 
-    // -------------------------------------------------------
-    // 7️ GENERAR ASIENTO
-    // -------------------------------------------------------
     let journalEntry = generateSaleJournalEntry(saleEvent, accountMapping, accountsCatalog)
+    journalEntry = { ...journalEntry, status: JournalEntryStatus.CREATED, eventType: EventType.SALE }
 
-    // Asiento nace en estado CREATED
-    journalEntry = {
-      ...journalEntry,
-      status: JournalEntryStatus.CREATED,
-    }
-
-    // -------------------------------------------------------
-    // 8️ GUARDAR ASIENTO
-    // -------------------------------------------------------
     await journalEntryRepository.save(journalEntry)
-
-    // -------------------------------------------------------
-    // 9️ AUTOMATIZACIÓN: PROCESAR ASIENTO
-    // -------------------------------------------------------
-    // Procesamos automáticamente para actualizar saldos y estados
     journalEntry = await processJournalEntry.process(journalEntry.id)
 
-    // -------------------------------------------------------
-    // 10 PRESENTAR RESULTADO AL FRONT/TELEGRAM
-    // -------------------------------------------------------
     return presentJournalEntry(journalEntry, accountsCatalog)
   }
 

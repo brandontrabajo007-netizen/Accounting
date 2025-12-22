@@ -1,5 +1,6 @@
 import type { JournalEntryRepository } from '@application/shared/ports/JournalEntryRepository'
 import type { PaginatedResult } from '@application/shared/ports/PaginatedResult'
+import type { EventType } from '@domain/events/EventType.enum'
 import type { JournalEntry } from '@domain/journal-entries/JournalEntry'
 import type { JournalEntryStatus } from '@domain/journal-entries/JournalEntryStatus'
 import type { FilterQuery } from 'mongoose'
@@ -42,8 +43,17 @@ export class MongoJournalEntryRepository implements JournalEntryRepository {
   /* ---------------------------------------------------
      🔥 MÉTODO CLAVE: PAGINADO + FILTROS
   --------------------------------------------------- */
-  async findPaginated(params: { companyId: string; page: number; limit: number; search?: string; status?: JournalEntryStatus; from?: Date; to?: Date }): Promise<PaginatedResult<JournalEntry>> {
-    const { companyId, page, limit, search, status, from, to } = params
+  async findPaginated(params: {
+    companyId: string
+    page: number
+    limit: number
+    search?: string
+    status?: JournalEntryStatus
+    from?: Date
+    to?: Date
+    eventType?: EventType
+  }): Promise<PaginatedResult<JournalEntry>> {
+    const { companyId, page, limit, search, status, from, to, eventType } = params
 
     const query: FilterQuery<JournalEntryDocument> = {
       companyId,
@@ -57,6 +67,11 @@ export class MongoJournalEntryRepository implements JournalEntryRepository {
     // 🏷 Estado
     if (status) {
       query.status = status
+    }
+
+    // Evento
+    if (eventType) {
+      query.eventType = eventType
     }
 
     // 📅 Rango de fechas

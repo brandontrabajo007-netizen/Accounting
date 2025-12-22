@@ -1,3 +1,4 @@
+import type { EventType } from '@domain/events/EventType.enum'
 import type { JournalEntry } from '@domain/journal-entries/JournalEntry'
 import type { JournalEntryStatus } from '@domain/journal-entries/JournalEntryStatus'
 import type { PaginatedResult } from './PaginatedResult'
@@ -16,5 +17,14 @@ export interface JournalEntryRepository {
   /* -------------------------------------------
      🔥 NUEVO: Paginación + filtros
   ------------------------------------------- */
-  findPaginated(params: { companyId: string; page: number; limit: number; search?: string; status?: JournalEntryStatus; from?: Date; to?: Date }): Promise<PaginatedResult<JournalEntry>>
+  findPaginated(params: {
+    companyId: string
+    page: number
+    limit: number
+    search?: string
+    status?: JournalEntryStatus
+    from?: Date
+    to?: Date
+    eventType?: EventType
+  }): Promise<PaginatedResult<JournalEntry>>
 }

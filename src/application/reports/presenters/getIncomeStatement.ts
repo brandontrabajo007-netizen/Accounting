@@ -1,27 +1,21 @@
 import type { Account } from '@domain/accounts/Account'
-import type { JournalEntry } from '@domain/journal-entries/JournalEntry'
-import { buildLedger } from '@domain/reports/buildLedger'
 import type { AccountDetail } from './AccountDetail'
 import type { IncomeStatementResult } from './IncomeStatementResult'
 
-export const getIncomeStatement = (entries: JournalEntry[], accounts: Account[], period: { start: Date; end: Date }): IncomeStatementResult => {
-  // 1️ Construimos el ledger consolidado
-  const ledger = buildLedger(entries)
+type IncomeSection = 'Sales Revenue' | 'Cost of Goods Sold' | 'Operating Expenses' | null
 
-  // 2️ Preparar la estructura base
+export const getIncomeStatement = (accounts: Account[], companyId: string, period: { start: string; end: string }): IncomeStatementResult => {
   const result: IncomeStatementResult = {
     name: 'Income Statement',
-    description: `Period ${period.start.toISOString().slice(0, 10)} - ${period.end.toISOString().slice(0, 10)}`,
+    description: `Periodo ${period.start} - ${period.end}`,
     period: {
-      start: period.start.toISOString(),
-      end: period.end.toISOString(),
+      start: period.start,
+      end: period.end,
     },
     sections: [
       { name: 'Sales Revenue', accounts: [], total: 0 },
       { name: 'Cost of Goods Sold', accounts: [], total: 0 },
       { name: 'Operating Expenses', accounts: [], total: 0 },
-      { name: 'Other Income', accounts: [], total: 0 },
-      { name: 'Other Expenses', accounts: [], total: 0 },
     ],
     totals: {
       grossProfit: 0,
@@ -31,72 +25,51 @@ export const getIncomeStatement = (entries: JournalEntry[], accounts: Account[],
     generatedAt: new Date().toISOString(),
   }
 
-  // 3️ Mapa para agrupar cuentas por sección
-  const sectionMaps = new Map<string, Map<number, AccountDetail>>()
-  for (const section of result.sections) {
-    sectionMaps.set(section.name, new Map())
-  }
+  const sectionMaps = new Map<IncomeSection, Map<number, AccountDetail>>([
+    ['Sales Revenue', new Map()],
+    ['Cost of Goods Sold', new Map()],
+    ['Operating Expenses', new Map()],
+  ])
 
-  // 4️ Recorrer catálogo de cuentas
   for (const account of accounts) {
-    const line = ledger[account.code]
-    if (!line) continue // sin movimientos → skip
+    const balance = account.currentBalanceByCompany?.[companyId] ?? 0
+    if (balance === 0) continue
 
     const sectionName = classifyAccount(account.code)
+    if (!sectionName) continue
+
     const sectionMap = sectionMaps.get(sectionName)
     if (!sectionMap) continue
 
-    // Cálculo del neto según tipo de sección
-    // ingresos → crédito - débito
-    // gastos/costos → débito - crédito
-    const isIncomeSection = sectionName === 'Sales Revenue' || sectionName === 'Other Income'
-
-    const net = isIncomeSection ? line.credit - line.debit : line.debit - line.credit
-
-    if (net === 0) continue
-
-    const detail: AccountDetail = {
+    sectionMap.set(account.code, {
       code: account.code,
       name: account.name,
-      total: net,
-    }
-
-    sectionMap.set(account.code, detail)
+      total: balance,
+    })
   }
 
-  // 5️ Pasar mapa → resultado final en sections
   for (const section of result.sections) {
-    const map = sectionMaps.get(section.name)
+    const map = sectionMaps.get(section.name as IncomeSection)
     if (!map) continue
 
     section.accounts = Array.from(map.values())
     section.total = section.accounts.reduce((sum, acc) => sum + acc.total, 0)
   }
 
-  // 6️ Totales principales (igual a tu versión original)
   const revenue = result.sections[0].total
   const cogs = result.sections[1].total
   const operatingExpenses = result.sections[2].total
-  const otherIncome = result.sections[3].total
-  const otherExpenses = result.sections[4].total
 
   result.totals.grossProfit = revenue - cogs
   result.totals.operatingIncome = revenue - cogs - operatingExpenses
-  result.totals.incomeBeforeTaxes = revenue - cogs - operatingExpenses + otherIncome - otherExpenses
+  result.totals.incomeBeforeTaxes = result.totals.operatingIncome
 
   return result
 }
 
-// ---------------------------------------
-//  Classification Logic (extensible)
-// ---------------------------------------
-
-const classifyAccount = (code: number): string => {
+const classifyAccount = (code: number): IncomeSection => {
   if (code >= 4100 && code < 4200) return 'Sales Revenue'
-  if (code >= 6130 && code < 6140) return 'Cost of Goods Sold'
+  if (code >= 6100 && code < 6200) return 'Cost of Goods Sold'
   if (code >= 5100 && code < 5400) return 'Operating Expenses'
-  if (code >= 4200 && code < 4300) return 'Other Income'
-  if (code >= 5300 && code < 5350) return 'Other Expenses'
-
-  return 'Other Expenses'
+  return null
 }

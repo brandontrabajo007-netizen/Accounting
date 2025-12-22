@@ -81,38 +81,6 @@ router.post('/webhook', async (req: Request, res: Response) => {
     if (detected.type === 'sale') {
       const saleInput = detected.data as SaleEventInput
 
-      if (
-        !saleInput.description ||
-        saleInput.quantity === null ||
-        (saleInput.totalAmount === null && saleInput.unitPrice === null) ||
-        saleInput.includesCost === null ||
-        saleInput.includesVAT === null
-      ) {
-        if (!ensureChatId(chatId, res)) return
-
-        await TelegramClient.sendMessage({
-          chatId,
-          text: `
-❗ No logré entender bien tu mensaje.
-
-Para registrar una venta necesito:
-
-• Cantidad  
-• Producto  
-• Precio (unitario o total)  
-• Si tiene costo  
-• Si incluye IVA
-
-Ejemplos:
-- Venta 10 pantalones a 50.000 me cuesta 36.000 cada uno, sin IVA
-- Venta 8 camisas por 450.000 me costaron 200.000 todas, con IVA
-          `.trim(),
-          parseMode: 'Markdown',
-        })
-
-        return res.status(200).json({ ok: true })
-      }
-
       const result = await registerSale(saleInput)
 
       const movementsText = result.movements
@@ -122,14 +90,20 @@ Ejemplos:
         })
         .join('\n')
 
-      const summary = `
-✅ *Venta registrada correctamente*
+      const isPending = result.status === 'pending'
+      const statusIcon = isPending ? '⚠️' : '✅'
+      const statusText = isPending ? '*Borrador guardado (Incompleto)*' : '*Venta registrada correctamente*'
 
-*Descripción:* ${saleInput.description}
+      const summary = `
+${statusIcon} ${statusText}
+
+*Descripción:* ${result.description}
 *Total:* ${saleInput.totalAmount}
 
 *Movimientos contables:*
 ${movementsText}
+
+${isPending ? '_Completa los datos faltantes en el panel administrativo._' : ''}
       `.trim()
 
       if (!ensureChatId(chatId, res)) return
@@ -149,30 +123,6 @@ ${movementsText}
     if (detected.type === 'purchase') {
       const purchaseInput = detected.data as PurchaseEventInput
 
-      if (!purchaseInput.description || purchaseInput.amount === null || purchaseInput.paymentMethod === null || purchaseInput.debitAccount === null || purchaseInput.includesVAT === null) {
-        if (!ensureChatId(chatId, res)) return
-
-        await TelegramClient.sendMessage({
-          chatId,
-          text: `
-❗ No logré entender la *compra*.
-
-Debes indicar:
-• Qué compraste  
-• Valor  
-• Si incluye IVA  
-• Forma de pago  
-• Tipo (insumos, gastos, servicios, propiedades)
-
-Ejemplo:
-"Compré tela por 700.000 con IVA, pagado por banco, es insumo".
-          `.trim(),
-          parseMode: 'Markdown',
-        })
-
-        return res.status(200).json({ ok: true })
-      }
-
       const result = await registerPurchase(purchaseInput)
 
       const movementsText = result.movements
@@ -182,14 +132,20 @@ Ejemplo:
         })
         .join('\n')
 
-      const summary = `
-🧾 *Compra registrada correctamente*
+      const isPending = result.status === 'pending'
+      const statusIcon = isPending ? '⚠️' : '✅'
+      const statusText = isPending ? '*Borrador de Compra (Incompleto)*' : '*Compra registrada correctamente*'
 
-*Descripción:* ${purchaseInput.description}
+      const summary = `
+${statusIcon} ${statusText}
+
+*Descripción:* ${result.description}
 *Total:* ${purchaseInput.amount}
 
 *Movimientos contables:*
 ${movementsText}
+
+${isPending ? '_Completa los detalles en el panel administrativo._' : ''}
       `.trim()
 
       if (!ensureChatId(chatId, res)) return
@@ -209,26 +165,6 @@ ${movementsText}
     if (detected.type === 'payroll') {
       const payrollInput = detected.data as PayrollEventInput
 
-      if (!payrollInput.description || payrollInput.amount === null || payrollInput.paymentMethod === null) {
-        if (!ensureChatId(chatId, res)) return
-
-        await TelegramClient.sendMessage({
-          chatId,
-          text: `
-❗ No logré entender el *pago de nómina*.
-
-Ejemplos válidos:
-
-• pagué nómina 500000 por banco  
-• pagué mano de obra 300000 en efectivo  
-• pago empleados 1.200.000 por banco  
-          `.trim(),
-          parseMode: 'Markdown',
-        })
-
-        return res.status(200).json({ ok: true })
-      }
-
       const result = await registerPayroll(payrollInput)
 
       const movementsText = result.movements
@@ -238,14 +174,20 @@ Ejemplos válidos:
         })
         .join('\n')
 
-      const summary = `
-👥 *Pago de nómina registrado correctamente*
+      const isPending = result.status === 'pending'
+      const statusIcon = isPending ? '⚠️' : '✅'
+      const statusText = isPending ? '*Borrador de Nómina (Incompleto)*' : '*Pago de nómina registrado*'
 
-*Descripción:* ${payrollInput.description}
+      const summary = `
+${statusIcon} ${statusText}
+
+*Descripción:* ${result.description}
 *Total:* ${payrollInput.amount}
 
 *Movimientos contables:*
 ${movementsText}
+
+${isPending ? '_Recuerda completar la información en el panel._' : ''}
       `.trim()
 
       if (!ensureChatId(chatId, res)) return

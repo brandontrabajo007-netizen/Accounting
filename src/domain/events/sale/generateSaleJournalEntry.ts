@@ -1,6 +1,7 @@
-// src/domain/journal-entries/helpers/generateSaleJournalEntry.ts
+// src/domain/events/sale/generateSaleJournalEntry.ts
 
 import { randomUUID } from 'node:crypto'
+import type { Account } from '@domain/accounts/Account'
 import type { SaleAccountConfig } from '@domain/events/sale/SaleAccountConfig'
 import type { SaleEvent } from '@domain/events/sale/SaleEvent'
 import type { JournalEntry } from '@domain/journal-entries/JournalEntry'
@@ -11,91 +12,72 @@ import { TransactionTypes } from '@domain/movements/TransactionType'
 
 const VAT_RATE = 0.19
 
-import type { Account } from '@domain/accounts/Account'
+const getAccountName = (catalog: Account[], code: number): string => catalog.find((a) => a.code === code)?.name ?? ''
 
 export const generateSaleJournalEntry = (event: SaleEvent, accounts: SaleAccountConfig, accountsCatalog: Account[]): JournalEntry => {
-  const getAccountName = (code: number): string => {
-    const account = accountsCatalog.find((a) => a.code === code)
-    if (!account) throw new Error(`Account with code ${code} not found in catalog`)
-    return account.name
-  }
-  if (event.totalAmount <= 0) {
-    throw new Error('Total amount must be greater than zero')
-  }
-
+  const totalAmount = event.totalAmount > 0 ? event.totalAmount : 0
   const movements: Movement[] = []
 
-  // 1️ Entrada (caja / banco)
+  // Entrada (caja / banco)
   movements.push({
     accountCode: accounts.cashAccount,
-    accountName: getAccountName(accounts.cashAccount),
+    accountName: getAccountName(accountsCatalog, accounts.cashAccount),
     type: TransactionTypes.DEBIT,
-    amount: event.totalAmount,
-    status: MovementStatus.CREATED,
+    amount: totalAmount,
+    status: totalAmount > 0 ? MovementStatus.CREATED : MovementStatus.PENDING,
     group: 'REVENUE',
   })
 
-  // 2️ IVA — siempre se genera el movimiento
+  // IVA
   let vat = 0
-  let base = event.totalAmount
+  let base = totalAmount
   const vatAccount = accounts.vatAccount
 
-  if (!vatAccount && event.includesVAT) {
-    throw new Error('VAT account not provided')
-  }
-
-  if (event.includesVAT) {
-    base = Math.round(event.totalAmount / (1 + VAT_RATE))
-    vat = event.totalAmount - base
+  if (event.includesVAT && totalAmount > 0) {
+    base = Math.round(totalAmount / (1 + VAT_RATE))
+    vat = totalAmount - base
   }
 
   movements.push({
     accountCode: vatAccount ?? 0,
-    accountName: getAccountName(vatAccount ?? 0),
+    accountName: getAccountName(accountsCatalog, vatAccount ?? 0),
     type: TransactionTypes.CREDIT,
     amount: event.includesVAT ? vat : 0,
-    status: MovementStatus.CREATED,
+    status: vat > 0 ? MovementStatus.CREATED : MovementStatus.PENDING,
     group: 'REVENUE',
   })
 
-  // 3️ Ingreso por ventas (siempre se genera)
+  // Ingreso por ventas
   movements.push({
     accountCode: accounts.incomeAccount,
-    accountName: getAccountName(accounts.incomeAccount),
+    accountName: getAccountName(accountsCatalog, accounts.incomeAccount),
     type: TransactionTypes.CREDIT,
     amount: base,
-    status: MovementStatus.CREATED,
+    status: base > 0 ? MovementStatus.CREATED : MovementStatus.PENDING,
     group: 'REVENUE',
   })
 
-  // 4️ Costo de venta (siempre se genera)
+  // Costo de venta
   let cost = 0
-  if (!accounts.cogsAccount || !accounts.inventoryAccount) {
-    if (event.includesCost) {
-      throw new Error('Cost or inventory account not provided')
-    }
-  }
-
-  if (event.includesCost) {
-    if (!event.quantity || !event.unitCost) throw new Error('Quantity and unit cost must be provided')
+  if (event.includesCost && event.quantity && event.unitCost) {
     cost = event.quantity * event.unitCost
   }
 
   movements.push({
     accountCode: accounts.cogsAccount ?? 0,
-    accountName: getAccountName(accounts.cogsAccount ?? 0),
+    accountName: getAccountName(accountsCatalog, accounts.cogsAccount ?? 0),
     type: TransactionTypes.DEBIT,
     amount: event.includesCost ? cost : 0,
-    status: MovementStatus.CREATED,
+    status: cost > 0 ? MovementStatus.CREATED : MovementStatus.PENDING,
     group: 'COST',
   })
 
   movements.push({
     accountCode: accounts.inventoryAccount ?? 0,
-    accountName: getAccountName(accounts.inventoryAccount ?? 0),
+    accountName: getAccountName(accountsCatalog, accounts.inventoryAccount ?? 0),
     type: TransactionTypes.CREDIT,
     amount: event.includesCost ? cost : 0,
-    status: MovementStatus.CREATED,
+    status: cost > 0 ? MovementStatus.CREATED : MovementStatus.PENDING,
     group: 'COST',
   })
 

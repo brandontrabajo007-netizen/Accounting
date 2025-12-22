@@ -18,8 +18,22 @@ export class MongoAccountRepository implements AccountRepository {
     return mongoToAccount(doc)
   }
 
-  async updateBalance(accountCode: number, newBalance: number): Promise<void> {
-    const updated = await AccountModel.updateOne({ code: accountCode }, { $set: { currentBalance: newBalance } })
+  async getBalance(companyId: string, accountCode: number): Promise<number> {
+    const doc = await AccountModel.findOne({ code: accountCode }, { currentBalanceByCompany: 1 })
+
+    if (!doc) {
+      throw new Error(`Account ${accountCode} not found`)
+    }
+
+    const balance = doc.currentBalanceByCompany?.get?.(companyId)
+    return balance ?? 0
+  }
+
+  async applyBalanceDelta(companyId: string, accountCode: number, delta: number): Promise<void> {
+    const updated = await AccountModel.updateOne(
+      { code: accountCode },
+      { $inc: { [`currentBalanceByCompany.${companyId}`]: delta } },
+    )
 
     if (updated.matchedCount === 0) {
       throw new Error(`Cannot update balance: account ${accountCode} not found`)

@@ -1,3 +1,4 @@
+import type { EventType } from '@domain/events/EventType.enum'
 import type { JournalEntryStatus } from '@domain/journal-entries/JournalEntryStatus'
 import type { Movement } from '@domain/movements/Movement'
 import mongoose, { type Document, type PaginateModel, Schema } from 'mongoose'
@@ -11,6 +12,7 @@ export interface JournalEntryDocument extends Document {
   description: string
   status: JournalEntryStatus
   movements: Movement[]
+  eventType?: EventType
 }
 
 const MovementSchema = new Schema<Movement>(
@@ -34,6 +36,7 @@ const JournalEntrySchema = new Schema<JournalEntryDocument>(
     description: { type: String, required: true },
     status: { type: String, required: true },
     movements: { type: [MovementSchema], required: true },
+    eventType: { type: String },
   },
   {
     timestamps: true,

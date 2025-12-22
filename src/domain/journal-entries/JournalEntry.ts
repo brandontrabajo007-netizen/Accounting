@@ -1,3 +1,4 @@
+import type { EventType } from '../events/EventType.enum'
 import type { Movement } from '../movements/Movement'
 import type { JournalEntryStatus } from './JournalEntryStatus'
 
@@ -9,4 +10,5 @@ export type JournalEntry = {
   description: string
   status: JournalEntryStatus
   movements: Movement[]
+  eventType?: EventType
 }

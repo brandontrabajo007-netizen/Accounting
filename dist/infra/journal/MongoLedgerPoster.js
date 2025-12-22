@@ -33,7 +33,7 @@ class MongoLedgerPoster {
                     newBalance = movement.type === TransactionType_1.TransactionTypes.CREDIT ? newBalance + movement.amount : newBalance - movement.amount;
                 }
                 // 3. Guardar nuevo saldo
-                await this.balances.update(entry.companyId, movement.accountCode, newBalance);
+                await this.balances.update(entry.companyId, movement.accountCode, newBalance, account.name);
                 // 4. Guardar movimiento en ledgerMovements
                 await LedgerMovementModel_1.LedgerMovementMongoModel.create({
                     accountCode: movement.accountCode,

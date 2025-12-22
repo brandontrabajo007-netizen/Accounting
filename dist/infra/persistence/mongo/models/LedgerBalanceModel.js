@@ -38,6 +38,7 @@ const mongoose_1 = __importStar(require("mongoose"));
 const LedgerBalanceSchema = new mongoose_1.Schema({
     companyId: { type: String, required: true },
     accountCode: { type: Number, required: true },
+    accountName: { type: String, required: false },
     balance: { type: Number, required: true, default: 0 },
 }, { timestamps: true });
 LedgerBalanceSchema.index({ companyId: 1, accountCode: 1 }, { unique: true });

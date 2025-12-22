@@ -9,34 +9,30 @@ import { TransactionTypes } from '@domain/movements/TransactionType'
 import type { PayrollAccountConfig } from './PayrollAccountConfig'
 import type { PayrollEvent } from './PayrollEvent'
 
+const getAccountName = (catalog: Account[], code?: number): string => {
+  if (!code) return ''
+  return catalog.find((a) => a.code === code)?.name ?? ''
+}
+
 export const generatePayrollJournalEntry = (event: PayrollEvent, config: PayrollAccountConfig, accountsCatalog: Account[]): JournalEntry => {
-  const getAccountName = (code: number): string => {
-    const account = accountsCatalog.find((a) => a.code === code)
-    if (!account) throw new Error(`Account with code ${code} not found in catalog`)
-    return account.name
-  }
-
-  if (event.amount <= 0) {
-    throw new Error('Amount must be greater than zero')
-  }
-
+  const amount = event.amount > 0 ? event.amount : 0
   const creditAccountCode = event.paymentMethod === 'cash' ? config.cashAccount : config.bankAccount
 
   const movements: Movement[] = [
     {
-      accountCode: config.expenseAccount, // 5105
-      accountName: getAccountName(config.expenseAccount),
+      accountCode: config.expenseAccount ?? 0,
+      accountName: getAccountName(accountsCatalog, config.expenseAccount),
       type: TransactionTypes.DEBIT,
-      amount: event.amount,
-      status: MovementStatus.CREATED,
+      amount,
+      status: amount > 0 ? MovementStatus.CREATED : MovementStatus.PENDING,
       group: 'MAIN',
     },
     {
-      accountCode: creditAccountCode,
-      accountName: getAccountName(creditAccountCode),
+      accountCode: creditAccountCode ?? 0,
+      accountName: getAccountName(accountsCatalog, creditAccountCode),
       type: TransactionTypes.CREDIT,
-      amount: event.amount,
-      status: MovementStatus.CREATED,
+      amount,
+      status: amount > 0 && creditAccountCode ? MovementStatus.CREATED : MovementStatus.PENDING,
       group: 'MAIN',
     },
   ]
@@ -46,7 +42,7 @@ export const generatePayrollJournalEntry = (event: PayrollEvent, config: Payroll
     companyId: event.companyId,
     date: event.date,
     description: event.description,
-    status: JournalEntryStatus.CREATED, // igual que sales/purchase
+    status: JournalEntryStatus.CREATED,
     movements,
   }
 }

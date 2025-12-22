@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { Account } from '@domain/accounts/Account'
 import type { JournalEntry } from '@domain/journal-entries/JournalEntry'
 import { JournalEntryStatus } from '@domain/journal-entries/JournalEntryStatus'
 import type { Movement } from '@domain/movements/Movement'
@@ -9,50 +10,38 @@ import type { PurchaseEvent } from './PurchaseEvent'
 
 const VAT_RATE = 0.19
 
-import type { Account } from '@domain/accounts/Account'
+const getAccountName = (catalog: Account[], code: number): string => catalog.find((a) => a.code === code)?.name ?? ''
 
 export const generatePurchaseJournalEntry = (event: PurchaseEvent, config: PurchaseAccountConfig, accountsCatalog: Account[]): JournalEntry => {
-  const getAccountName = (code: number): string => {
-    const account = accountsCatalog.find((a) => a.code === code)
-    if (!account) throw new Error(`Account with code ${code} not found in catalog`)
-    return account.name
-  }
-
   const movements: Movement[] = []
 
-  // ▶ Calcular base e IVA
-  let base = event.amount
+  let base = event.amount > 0 ? event.amount : 0
   let vat = 0
 
-  if (event.includesVAT && config.vatAccount) {
+  if (event.includesVAT && config.vatAccount && base > 0) {
     base = Math.round(event.amount / (1 + VAT_RATE))
     vat = event.amount - base
   }
 
-  // ▶ 1. DEBE - Cuenta elegida por el usuario
   movements.push({
-    accountCode: event.debitAccount,
-    accountName: getAccountName(event.debitAccount),
+    accountCode: event.debitAccount ?? 0,
+    accountName: getAccountName(accountsCatalog, event.debitAccount ?? 0),
     type: TransactionTypes.DEBIT,
     amount: base,
-    status: MovementStatus.CREATED,
+    status: base > 0 ? MovementStatus.CREATED : MovementStatus.PENDING,
     group: 'MAIN',
   })
 
-  // ▶ 2. DEBE - IVA descontable (opcional)
-  if (vat > 0 && config.vatAccount) {
+  if (config.vatAccount) {
     movements.push({
       accountCode: config.vatAccount,
-      accountName: getAccountName(config.vatAccount),
+      accountName: getAccountName(accountsCatalog, config.vatAccount),
       type: TransactionTypes.DEBIT,
       amount: vat,
-      status: MovementStatus.CREATED,
+      status: vat > 0 ? MovementStatus.CREATED : MovementStatus.PENDING,
       group: 'MAIN',
     })
   }
-
-  // ▶ 3. HABER - Método de pago
-  const total = event.amount
 
   let creditAccount: number | undefined
 
@@ -60,20 +49,15 @@ export const generatePurchaseJournalEntry = (event: PurchaseEvent, config: Purch
   if (event.paymentMethod === 'bank') creditAccount = config.bankAccount
   if (event.paymentMethod === 'credit') creditAccount = config.accountsPayableAccount
 
-  if (!creditAccount) {
-    throw new Error('Missing credit account for payment method')
-  }
-
   movements.push({
-    accountCode: creditAccount,
-    accountName: getAccountName(creditAccount),
+    accountCode: creditAccount ?? 0,
+    accountName: getAccountName(accountsCatalog, creditAccount ?? 0),
     type: TransactionTypes.CREDIT,
-    amount: total,
-    status: MovementStatus.CREATED,
+    amount: event.amount ?? 0,
+    status: event.amount > 0 && creditAccount ? MovementStatus.CREATED : MovementStatus.PENDING,
     group: 'MAIN',
   })
 
-  // ▶ Armar JournalEntry
   return {
     id: randomUUID(),
     companyId: event.companyId,
