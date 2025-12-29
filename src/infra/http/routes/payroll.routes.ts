@@ -1,7 +1,7 @@
 import type { PayrollEventInput } from '@application/eventos/Payroll/data/PayrollEventInput'
 import { makeRegisterPayroll } from '@application/eventos/Payroll/use-case/registerPayroll'
 import { type Request, type Response, Router } from 'express'
-import { accountRepository, journalEntryRepository, payrollAccountMappingRepository, processJournalEntry } from '../dependencies'
+import { accountRepository, journalEntryRepository, payrollAccountMappingRepository, periodAccessGuard, processJournalEntry, resolvePeriodId } from '../dependencies'
 import { authMiddleware } from '../middleware/auth'
 
 const router = Router()
@@ -12,6 +12,8 @@ const { registerPayroll } = makeRegisterPayroll({
   journalEntryRepository,
   payrollAccountMappingRepository,
   processJournalEntry,
+  periodAccessGuard,
+  resolvePeriodId,
 })
 
 router.post('/payroll', authMiddleware, async (req: Request, res: Response) => {

@@ -3,6 +3,7 @@ export enum EventType {
   SALE = 'sale',
   PURCHASE = 'purchase',
   PAYROLL = 'payroll',
+  CLOSING = 'closing',
 
   // future: EXPENSE = 'expense',
 }

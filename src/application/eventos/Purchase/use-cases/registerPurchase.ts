@@ -1,3 +1,5 @@
+import type { PeriodAccessGuard } from '@application/accounting-periods/services/PeriodAccessGuard'
+import type { ResolvePeriodId } from '@application/accounting-periods/services/resolvePeriodId'
 import type { AccountRepository } from '@application/shared/ports/AccountRepository'
 import type { JournalEntryRepository } from '@application/shared/ports/JournalEntryRepository'
 import { EventType } from '@domain/events/EventType.enum'
@@ -15,13 +17,29 @@ export interface MakeRegisterPurchaseDeps {
   purchaseAccountMappingRepository: PurchaseAccountMappingRepository
   journalEntryRepository: JournalEntryRepository
   processJournalEntry: { process: (id: string) => Promise<JournalEntry> }
+  periodAccessGuard: PeriodAccessGuard
+  resolvePeriodId: ResolvePeriodId
 }
 
-export const makeRegisterPurchase = ({ accountRepository, purchaseAccountMappingRepository, journalEntryRepository, processJournalEntry }: MakeRegisterPurchaseDeps) => {
+export const makeRegisterPurchase = ({
+  accountRepository,
+  purchaseAccountMappingRepository,
+  journalEntryRepository,
+  processJournalEntry,
+  periodAccessGuard,
+  resolvePeriodId,
+}: MakeRegisterPurchaseDeps) => {
   const registerPurchase = async (input: PurchaseEventInput) => {
     const date = input.date ? new Date(input.date) : new Date()
-
     const companyId = input.companyId ?? ''
+    if (!companyId) {
+      throw new Error('companyId is required')
+    }
+
+    const periodId = await resolvePeriodId.resolve(companyId, input.periodId)
+
+    await periodAccessGuard.assertWritable(companyId, periodId)
+
     const catalog = await accountRepository.getAll()
     const mapping = await purchaseAccountMappingRepository.getPurchaseAccountMappingByCompanyId(companyId)
 
@@ -41,7 +59,7 @@ export const makeRegisterPurchase = ({ accountRepository, purchaseAccountMapping
     validatePurchaseAccount(mapping, catalog, purchaseEvent)
 
     let journalEntry = generatePurchaseJournalEntry(purchaseEvent, mapping, catalog)
-    journalEntry = { ...journalEntry, eventType: EventType.PURCHASE }
+    journalEntry = { ...journalEntry, eventType: EventType.PURCHASE, periodId }
 
     await journalEntryRepository.save(journalEntry)
     journalEntry = await processJournalEntry.process(journalEntry.id)

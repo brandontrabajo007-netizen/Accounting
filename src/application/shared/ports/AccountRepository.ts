@@ -7,4 +7,5 @@ export interface AccountRepository {
   getByCode(code: number): Promise<Account>
   getBalance(companyId: string, accountCode: number): Promise<number>
   applyBalanceDelta(companyId: string, accountCode: number, delta: number): Promise<void>
+  resetBalances(companyId: string, accountCodes?: number[]): Promise<void>
 }

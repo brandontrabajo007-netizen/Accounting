@@ -1,5 +1,8 @@
+import type { PeriodAccessGuard } from '@application/accounting-periods/services/PeriodAccessGuard'
+import type { ResolvePeriodId } from '@application/accounting-periods/services/resolvePeriodId'
 import type { AccountRepository } from '@application/shared/ports/AccountRepository'
 import type { JournalEntryRepository } from '@application/shared/ports/JournalEntryRepository'
+
 
 import { EventType } from '@domain/events/EventType.enum'
 import { generatePayrollJournalEntry } from '@domain/events/payroll/generatePayrollJournalEntry'
@@ -17,11 +20,25 @@ export interface MakeRegisterPayrollDeps {
   payrollAccountMappingRepository: PayrollAccountMappingRepository
   journalEntryRepository: JournalEntryRepository
   processJournalEntry: { process: (id: string) => Promise<JournalEntry> }
+  periodAccessGuard: PeriodAccessGuard
+  resolvePeriodId: ResolvePeriodId
 }
 
-export const makeRegisterPayroll = ({ accountRepository, payrollAccountMappingRepository, journalEntryRepository, processJournalEntry }: MakeRegisterPayrollDeps) => {
+export const makeRegisterPayroll = ({
+  accountRepository,
+  payrollAccountMappingRepository,
+  journalEntryRepository,
+  processJournalEntry,
+  periodAccessGuard,
+  resolvePeriodId,
+}: MakeRegisterPayrollDeps) => {
   const registerPayroll = async (input: PayrollEventInput) => {
     const date = input.date ? new Date(input.date) : new Date()
+    if (!input.companyId) {
+      throw new Error('companyId is required')
+    }
+
+    const periodId = await resolvePeriodId.resolve(input.companyId, input.periodId)
 
     const catalog = await accountRepository.getAll()
 
@@ -40,8 +57,10 @@ export const makeRegisterPayroll = ({ accountRepository, payrollAccountMappingRe
 
     validatePayrollAccount(mapping, catalog, payrollEvent)
 
+    await periodAccessGuard.assertWritable(input.companyId, periodId)
+
     let journalEntry = generatePayrollJournalEntry(payrollEvent, mapping, catalog)
-    journalEntry = { ...journalEntry, eventType: EventType.PAYROLL }
+    journalEntry = { ...journalEntry, eventType: EventType.PAYROLL, periodId }
 
     await journalEntryRepository.save(journalEntry)
 

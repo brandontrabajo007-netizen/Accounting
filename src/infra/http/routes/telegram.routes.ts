@@ -23,6 +23,8 @@ import {
   purchaseAccountMappingRepository,
   saleAccountMappingRepository,
   userRepository,
+  periodAccessGuard,
+  resolvePeriodId,
 } from '../dependencies'
 
 const router = express.Router()
@@ -33,6 +35,8 @@ const { registerSale } = makeRegisterSale({
   journalEntryRepository,
   saleAccountMappingRepository,
   processJournalEntry,
+  periodAccessGuard,
+  resolvePeriodId,
 })
 
 const { registerPurchase } = makeRegisterPurchase({
@@ -40,6 +44,8 @@ const { registerPurchase } = makeRegisterPurchase({
   journalEntryRepository,
   purchaseAccountMappingRepository,
   processJournalEntry,
+  periodAccessGuard,
+  resolvePeriodId,
 })
 
 const { registerPayroll } = makeRegisterPayroll({
@@ -47,6 +53,8 @@ const { registerPayroll } = makeRegisterPayroll({
   journalEntryRepository,
   payrollAccountMappingRepository,
   processJournalEntry,
+  periodAccessGuard,
+  resolvePeriodId,
 })
 
 /* ---------------------------------------------------------

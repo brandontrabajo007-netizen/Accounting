@@ -1,6 +1,6 @@
 import { makeRegisterPurchase } from '@application/eventos/Purchase/use-cases/registerPurchase'
 import express from 'express'
-import { accountRepository, journalEntryRepository, processJournalEntry, purchaseAccountMappingRepository } from '../dependencies'
+import { accountRepository, journalEntryRepository, periodAccessGuard, processJournalEntry, purchaseAccountMappingRepository, resolvePeriodId } from '../dependencies'
 import { authMiddleware } from '../middleware/auth'
 
 const router = express.Router()
@@ -10,6 +10,8 @@ const { registerPurchase } = makeRegisterPurchase({
   purchaseAccountMappingRepository,
   journalEntryRepository,
   processJournalEntry,
+  periodAccessGuard,
+  resolvePeriodId,
 })
 
 router.post('/purchase', authMiddleware, async (req, res) => {
@@ -33,6 +35,7 @@ router.post('/purchase', authMiddleware, async (req, res) => {
       supplier: body.supplier,
       date: body.date,
       companyId, // <-- viene del token
+      periodId: body.periodId,
     })
 
     return res.status(201).json({

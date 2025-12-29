@@ -1,6 +1,6 @@
 import { makeRegisterSale } from '@application/eventos/sales/use-cases/registerSale'
 import express from 'express'
-import { accountRepository, journalEntryRepository, processJournalEntry, saleAccountMappingRepository } from '../dependencies'
+import { accountRepository, journalEntryRepository, periodAccessGuard, processJournalEntry, saleAccountMappingRepository, resolvePeriodId } from '../dependencies'
 import { authMiddleware } from '../middleware/auth'
 
 const router = express.Router()
@@ -10,14 +10,16 @@ const { registerSale } = makeRegisterSale({
   saleAccountMappingRepository,
   journalEntryRepository,
   processJournalEntry,
+  periodAccessGuard,
+  resolvePeriodId,
 })
 
-// 🚀 REGISTRAR VENTA (PROTEGIDO CON JWT)
+// dYs? REGISTRAR VENTA (PROTEGIDO CON JWT)
 router.post('/sale', authMiddleware, async (req, res) => {
   try {
     const body = req.body
 
-    // 👇 Guard para que TS y Biome estén felices
+    // dY`Ø Guard para que TS y Biome estén felices
     if (!req.user) {
       return res.status(500).json({
         status: false,
@@ -36,7 +38,8 @@ router.post('/sale', authMiddleware, async (req, res) => {
       quantity: body.quantity,
       unitCost: body.unitCost,
       unitPrice: body.unitPrice,
-      companyId, // ← SIEMPRE del token
+      companyId, // siempre del token
+      periodId: body.periodId,
     })
 
     return res.status(201).json({

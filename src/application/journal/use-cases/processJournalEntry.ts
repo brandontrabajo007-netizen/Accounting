@@ -1,11 +1,14 @@
+import type { PeriodAccessGuard } from '@application/accounting-periods/services/PeriodAccessGuard'
 import type { JournalEntryRepository } from '@application/shared/ports/JournalEntryRepository'
 import type { JournalEntry } from '@domain/journal-entries/JournalEntry'
 import { JournalEntryStatus } from '@domain/journal-entries/JournalEntryStatus'
 import { MovementStatus } from '@domain/movements/MovementStatus'
 import type { LedgerPoster } from '../ports/LedgerPoster'
 
-export const makeProcessJournalEntry = (journalRepo: JournalEntryRepository, ledgerPoster: LedgerPoster) => {
+export const makeProcessJournalEntry = (journalRepo: JournalEntryRepository, ledgerPoster: LedgerPoster, periodAccessGuard: PeriodAccessGuard) => {
   const processEntry = async (entry: JournalEntry, previousEntry?: JournalEntry | null) => {
+    await periodAccessGuard.assertWritable(entry.companyId, entry.periodId)
+
     entry.status = JournalEntryStatus.PENDING
     await journalRepo.save(entry)
 

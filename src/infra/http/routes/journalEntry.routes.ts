@@ -136,6 +136,7 @@ router.put('/journal-entry/:id', authMiddleware, async (req, res) => {
       status: derivedStatus,
       movements,
       eventType: existingEntry.eventType,
+      periodId: existingEntry.periodId,
     }
 
     const processed = await processJournalEntry.processEntry(journalEntry, existingEntry)

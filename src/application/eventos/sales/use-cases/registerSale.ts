@@ -1,5 +1,7 @@
 // src/application/sales/use-cases/registerSale.ts
 
+import type { PeriodAccessGuard } from '@application/accounting-periods/services/PeriodAccessGuard'
+import type { ResolvePeriodId } from '@application/accounting-periods/services/resolvePeriodId'
 import { EventType } from '@domain/events/EventType.enum'
 import { generateSaleJournalEntry } from '@domain/events/sale/generateSaleJournalEntry'
 import type { SaleEvent } from '@domain/events/sale/SaleEvent'
@@ -17,13 +19,16 @@ export interface MakeRegisterSaleDeps {
   saleAccountMappingRepository: SaleAccountMappingRepository
   journalEntryRepository: JournalEntryRepository
   processJournalEntry: { process: (id: string) => Promise<JournalEntry> }
+  periodAccessGuard: PeriodAccessGuard
+  resolvePeriodId: ResolvePeriodId
 }
 
-export const makeRegisterSale = ({ accountRepository, saleAccountMappingRepository, journalEntryRepository, processJournalEntry }: MakeRegisterSaleDeps) => {
+export const makeRegisterSale = ({ accountRepository, saleAccountMappingRepository, journalEntryRepository, processJournalEntry, periodAccessGuard, resolvePeriodId }: MakeRegisterSaleDeps) => {
   const registerSale = async (input: SaleEventInput) => {
     const date = input.date ? new Date(input.date) : new Date()
     const includesVAT = input.includesVAT ?? false
     const includesCost = input.includesCost ?? false
+    const periodId = await resolvePeriodId.resolve(input.companyId, input.periodId)
 
     // Completar faltantes
     let quantity = input.quantity ?? 0
@@ -42,6 +47,8 @@ export const makeRegisterSale = ({ accountRepository, saleAccountMappingReposito
     totalAmount = totalAmount ?? 0
 
     const description = input.description && typeof input.description === 'string' ? input.description : 'Venta pendiente'
+
+    await periodAccessGuard.assertWritable(input.companyId, periodId)
 
     const accountsCatalog = await accountRepository.getAll()
     const accountMapping = await saleAccountMappingRepository.getSaleAccountMappingByCompanyId(input.companyId)
@@ -65,7 +72,7 @@ export const makeRegisterSale = ({ accountRepository, saleAccountMappingReposito
     validateSaleAccount(accountMapping, accountsCatalog, saleEvent)
 
     let journalEntry = generateSaleJournalEntry(saleEvent, accountMapping, accountsCatalog)
-    journalEntry = { ...journalEntry, status: JournalEntryStatus.CREATED, eventType: EventType.SALE }
+    journalEntry = { ...journalEntry, status: JournalEntryStatus.CREATED, eventType: EventType.SALE, periodId }
 
     await journalEntryRepository.save(journalEntry)
     journalEntry = await processJournalEntry.process(journalEntry.id)

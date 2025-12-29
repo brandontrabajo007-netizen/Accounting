@@ -10,6 +10,8 @@ export interface JournalEntryRepository {
 
   findByCompanyAndPeriod(companyId: string, start: Date, end: Date): Promise<JournalEntry[]>
 
+  findByPeriodId(companyId: string, periodId: string): Promise<JournalEntry[]>
+
   findByStatus(companyId: string, status: JournalEntryStatus): Promise<JournalEntry[]>
 
   deleteAllByCompany(companyId: string): Promise<void>

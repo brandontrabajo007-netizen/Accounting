@@ -16,6 +16,7 @@ import { reportRoutes } from './routes/reports.routes'
 import { saleRoutes } from './routes/sale.routes'
 import { telegramRoutes } from './routes/telegram.routes'
 import { userRoutes } from './routes/user.routes'
+import { accountingPeriodRoutes } from './routes/accountingPeriod.routes'
 
 const app = express()
 
@@ -49,6 +50,7 @@ app.use(bodyParser.json())
 // Rutas HTTP
 // --------------------
 app.use('/', saleRoutes)
+app.use('/', accountingPeriodRoutes)
 app.use('/reports', reportRoutes)
 app.use('/users', userRoutes)
 app.use('/auth', authRoutes)

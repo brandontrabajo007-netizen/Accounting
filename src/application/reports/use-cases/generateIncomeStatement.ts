@@ -1,19 +1,26 @@
 // src/application/reports/use-cases/generateIncomeStatement.ts
 
 import type { AccountRepository } from '@application/shared/ports/AccountRepository'
-import { getIncomeStatement } from '../presenters/getIncomeStatement'
+import type { JournalEntryRepository } from '@application/shared/ports/JournalEntryRepository'
+import { calculateIncomeStatementFromEntries } from '../services/calculateIncomeStatementFromEntries'
 
 type Dependencies = {
   accountRepository: AccountRepository
+  journalEntryRepository: JournalEntryRepository
 }
 
-export const makeGenerateIncomeStatement = ({ accountRepository }: Dependencies) => {
+export const makeGenerateIncomeStatement = ({ accountRepository, journalEntryRepository }: Dependencies) => {
   return {
     generateIncomeStatement: async (companyId: string, period: { start: string; end: string }) => {
       const accounts = await accountRepository.getAll()
-      const result = getIncomeStatement(accounts, companyId, period)
+      const entries = await journalEntryRepository.findByCompanyAndPeriod(companyId, new Date(period.start), new Date(period.end))
 
-      return result
+      return calculateIncomeStatementFromEntries({
+        companyId,
+        period,
+        entries,
+        accounts,
+      })
     },
   }
 }

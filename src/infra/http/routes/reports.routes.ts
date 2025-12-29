@@ -1,7 +1,7 @@
 import { makeGenerateAndSaveIncomeStatement } from '@application/reports/use-cases/generateAndSaveIncomeStatement'
 import { makeGenerateIncomeStatement } from '@application/reports/use-cases/generateIncomeStatement'
 import express from 'express'
-import { accountRepository, incomeStatementRepository } from '../dependencies'
+import { accountRepository, incomeStatementRepository, journalEntryRepository } from '../dependencies'
 import { authMiddleware } from '../middleware/auth'
 
 const router = express.Router()
@@ -12,11 +12,13 @@ const router = express.Router()
 
 const { generateIncomeStatement } = makeGenerateIncomeStatement({
   accountRepository,
+  journalEntryRepository,
 })
 
 const { execute: generateAndSaveIncomeStatement } = makeGenerateAndSaveIncomeStatement({
   accountRepository,
   incomeStatementRepository,
+  journalEntryRepository,
 })
 
 /* ======================================================

@@ -30,6 +30,18 @@ export class MongoJournalEntryRepository implements JournalEntryRepository {
     return docs.map(mongoToJournalEntry)
   }
 
+  async findByPeriodId(companyId: string, periodId: string): Promise<JournalEntry[]> {
+    const docs = await JournalEntryModel.find({
+      companyId,
+      periodId,
+    })
+      .select('-_id -__v')
+      .sort({ date: 1 })
+      .lean<JournalEntryDocument[]>()
+
+    return docs.map(mongoToJournalEntry)
+  }
+
   async findByStatus(companyId: string, status: JournalEntryStatus): Promise<JournalEntry[]> {
     const docs = await JournalEntryModel.find({ companyId, status }).select('-_id -__v').sort({ date: -1 }).lean<JournalEntryDocument[]>()
 

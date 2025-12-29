@@ -38,6 +38,36 @@ router.get('/', authMiddleware, async (req, res) => {
 })
 
 // ---------------------------------------------------------
+// 1.1) Resetear saldos contables por empresa (solo pruebas)
+// POST /ledger/reset-balances
+// ---------------------------------------------------------
+router.post('/reset-balances', authMiddleware, async (req, res) => {
+  try {
+    const companyId = req.user.companyId
+    const rawAccountCodes = req.body?.accountCodes
+    const accountCodes = Array.isArray(rawAccountCodes)
+      ? rawAccountCodes
+          .map(Number)
+          .filter((code) => Number.isFinite(code))
+      : undefined
+
+    await accountRepository.resetBalances(companyId, accountCodes)
+
+    return res.json({
+      status: 'ok',
+      companyId,
+      resetAccounts: accountCodes ?? 'all',
+    })
+  } catch (err) {
+    console.error('Error resetting ledger balances:', err)
+    return res.status(500).json({
+      status: 'error',
+      error: err instanceof Error ? err.message : 'Unknown error',
+    })
+  }
+})
+
+// ---------------------------------------------------------
 // 2) Obtener movimientos contables reales (Ledger Movements)
 // GET /ledger/movements/:companyId
 // ---------------------------------------------------------

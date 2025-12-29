@@ -7,12 +7,14 @@ import mongoosePaginate from 'mongoose-paginate-v2'
 export interface JournalEntryDocument extends Document {
   id: string
   companyId: string
+  periodId?: string
   journalNumber?: number
   date: Date
   description: string
   status: JournalEntryStatus
   movements: Movement[]
   eventType?: EventType
+  systemGenerated?: boolean
 }
 
 const MovementSchema = new Schema<Movement>(
@@ -31,12 +33,14 @@ const JournalEntrySchema = new Schema<JournalEntryDocument>(
   {
     id: { type: String, required: true, unique: true },
     companyId: { type: String, required: true, index: true },
+    periodId: { type: String, index: true },
     journalNumber: { type: Number },
     date: { type: Date, required: true, index: true },
     description: { type: String, required: true },
     status: { type: String, required: true },
     movements: { type: [MovementSchema], required: true },
     eventType: { type: String },
+    systemGenerated: { type: Boolean },
   },
   {
     timestamps: true,

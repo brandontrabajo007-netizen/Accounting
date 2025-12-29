@@ -32,21 +32,25 @@ const mapMovementToMongo = (m: Movement): Movement => ({
 export const mongoToJournalEntry = (doc: JournalEntryDocument): JournalEntry => ({
   id: doc.id,
   companyId: doc.companyId,
+  periodId: doc.periodId,
   journalNumber: doc.journalNumber,
   date: doc.date,
   description: doc.description,
   status: doc.status as JournalEntryStatus,
   movements: doc.movements.map(mapMovementFromMongo),
   eventType: doc.eventType,
+  systemGenerated: doc.systemGenerated,
 })
 
 export const journalEntryToMongo = (entry: JournalEntry) => ({
   id: entry.id,
   companyId: entry.companyId,
+  periodId: entry.periodId,
   journalNumber: entry.journalNumber,
   date: entry.date,
   description: entry.description,
   eventType: entry.eventType,
   status: entry.status,
   movements: entry.movements.map(mapMovementToMongo),
+  systemGenerated: entry.systemGenerated,
 })

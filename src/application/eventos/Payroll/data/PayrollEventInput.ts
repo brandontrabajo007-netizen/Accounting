@@ -5,4 +5,5 @@ export interface PayrollEventInput {
   paymentMethod: 'cash' | 'bank'
   date?: string
   beneficiary?: string
+  periodId?: string
 }
