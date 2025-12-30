@@ -1,4 +1,4 @@
-import type { LedgerPoster } from '@application/journal/ports/LedgerPoster'
+﻿import type { LedgerPoster } from '@application/journal/ports/LedgerPoster'
 import type { AccountRepository } from '@application/shared/ports/AccountRepository'
 import type { Account } from '@domain/accounts/Account'
 import { AccountType } from '@domain/accounts/AccountType'
@@ -27,7 +27,6 @@ export class MongoLedgerPoster implements LedgerPoster {
 
   private async computeEffects(entry: JournalEntry, accountCache: Map<number, Account | null>, mutateMovements: boolean): Promise<Map<number, number>> {
     const effects = new Map<number, number>()
-
     for (const movement of entry.movements) {
       const shouldApply = movement.status === MovementStatus.PROCESSED || movement.status === MovementStatus.CREATED
       if (!shouldApply) continue
@@ -85,6 +84,8 @@ export class MongoLedgerPoster implements LedgerPoster {
       }
     }
 
+    await LedgerMovementMongoModel.deleteMany({ companyId: entry.companyId, journalEntryId: entry.id })
+
     for (const movement of entry.movements) {
       if (movement.status !== MovementStatus.PROCESSED) continue
       await LedgerMovementMongoModel.create({
@@ -96,7 +97,10 @@ export class MongoLedgerPoster implements LedgerPoster {
         description: entry.description,
         companyId: entry.companyId,
         status: MovementStatus.PROCESSED,
+        periodId: entry.periodId,
       })
     }
   }
 }
+
+

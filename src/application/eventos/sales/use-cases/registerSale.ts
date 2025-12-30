@@ -25,10 +25,27 @@ export interface MakeRegisterSaleDeps {
 
 export const makeRegisterSale = ({ accountRepository, saleAccountMappingRepository, journalEntryRepository, processJournalEntry, periodAccessGuard, resolvePeriodId }: MakeRegisterSaleDeps) => {
   const registerSale = async (input: SaleEventInput) => {
-    const date = input.date ? new Date(input.date) : new Date()
+    const date = (() => {
+      if (input.date) {
+        const d = new Date(input.date)
+        if (!Number.isNaN(d.getTime())) return d
+      }
+      if (input.periodHint) {
+        const [year, month] = input.periodHint.split('-').map((v) => Number(v))
+        if (year && month && month >= 1 && month <= 12) {
+          return new Date(Date.UTC(year, month - 1, 1))
+        }
+      }
+      return new Date()
+    })()
     const includesVAT = input.includesVAT ?? false
     const includesCost = input.includesCost ?? false
-    const periodId = await resolvePeriodId.resolve(input.companyId, input.periodId)
+    const periodId = await resolvePeriodId.resolve(input.companyId, {
+      periodId: input.periodId,
+      date,
+      periodHint: input.periodHint,
+      reopenClosed: input.allowClosedReopen,
+    })
 
     // Completar faltantes
     let quantity = input.quantity ?? 0

@@ -2,7 +2,7 @@ import type { PayrollEventInput } from '@application/eventos/Payroll/data/Payrol
 import { GoogleGenerativeAI } from '@google/generative-ai'
 
 const apiKey = process.env.GEMINI_API_KEY
-if (!apiKey) throw new Error('❌ Falta GEMINI_API_KEY')
+if (!apiKey) throw new Error('Falta GEMINI_API_KEY')
 
 const genAI = new GoogleGenerativeAI(apiKey)
 const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
@@ -21,63 +21,34 @@ function extractJson(text: string): string {
 
 export async function aiParsePayroll(message: string): Promise<PayrollEventInput | null> {
   const prompt = `
-Eres un PARSEADOR ESTRICTO para mensajes de *pago de nómina exclusivamente a empleados*.
-NO eres chatbot. NO conversas. NO inventas datos.
-Solo parseas si el pago es a PERSONAL DE LA EMPRESA.
+Eres un PARSEADOR ESTRICTO para mensajes de pago de nómina (solo empleados internos).
+NO conversas. NO inventas datos. Solo JSON.
 
-Debes devolver SOLO un JSON válido con esta estructura:
-
+Responde exactamente:
 {
   "companyId": null,
   "description": string | null,
   "amount": number | null,
   "paymentMethod": "cash" | "bank" | null,
-  "date": string | null
+  "date": string | null,
+  "periodHint": string | null
 }
 
-REGLAS DE INTERPRETACIÓN:
+Reglas:
+1) Solo aplica si es pago a empleados internos (nómina, salario, auxiliar, bodeguero, conductor, etc.). Si es taller externo, maquila, tintorería, terceros → devuelve null.
+2) amount: número mencionado (ej: "pagué 500000", "nómina 1.200.000"). Si no hay → null.
+3) description: refleja pago de nómina o a empleado. Si no se puede → null.
+4) paymentMethod: efectivo/contado/caja → "cash"; banco/transferencia/nequi/daviplata → "bank"; no mencionado → null.
+5) date:
+   - Fecha explícita (2025-11-10, 10/11/2025) → "YYYY-MM-DDT00:00:00Z".
+   - Día+mes sin año (ej: "12 de noviembre") → usa el AÑO ACTUAL y devuelve "YYYY-MM-DDT00:00:00Z".
+   - Solo mes/año (ej: "en noviembre 2025") → date = null y periodHint = "2025-11".
+   - Solo mes sin año (ej: "en noviembre") → date = null y periodHint = "YYYY-11" usando el AÑO ACTUAL.
+   - Sin fecha → null.
+6) periodHint: "YYYY-MM" cuando solo hay mes/año; si no, null.
+7) companyId siempre null.
 
-1️⃣ amount  
-- Número expresado en el mensaje.  
-- Ej: “pagué 500000”, “nómina 1.200.000”, “le pagué al bodeguero 800.000”.
-
-2️⃣ description  
-Debe reflejar nómina de empleado:  
-- “Pago de nómina”  
-- “Pago de salario”  
-- “Pago a empleado”  
-- “Pago a auxiliar”, “Pago a bodeguero”, “Pago a conductor”, etc.
-
-❌ NO se debe usar payroll para terceros.
-Si el mensaje menciona talleres externos, tintorerías, modistas, maquila o servicios de terceros:
-NO corresponde a nómina → devolver null.
-
-Ejemplos NO válidos para payroll:
-- “pagué taller de confección…”  
-- “pagué tintorería…”  
-- “pagué estampador…”  
-- “pagué modista externa…”
-
-En esos casos debes devolver null.
-
-3️⃣ paymentMethod  
-- “en efectivo”, “contado”, “lo pagué en caja” → "cash"  
-- “por banco”, “transferencia”, “nequi”, “daviplata” → "bank"  
-- No mencionado → null
-
-4️⃣ date  
-- Si aparece una fecha explícita → úsala.  
-- Si no → null.
-
-5️⃣ companyId  
-Debe ser SIEMPRE null. No lo inventes.
-
-⚠️ IMPORTANTE  
-Si el mensaje NO describe un pago a un *empleado* → devuelve null.
-
-⚠️ SOLO responde con JSON válido. Nada más.
-
-Mensaje a interpretar:
+Mensaje:
 "${message}"
   `.trim()
 
@@ -89,7 +60,7 @@ Mensaje a interpretar:
     const json = JSON.parse(cleaned)
     return json as PayrollEventInput
   } catch (err) {
-    console.error('❌ Error parseando JSON de Payroll:', err)
+    console.error('Error parseando JSON de Payroll:', err)
     console.error('Texto original:', raw)
     console.error('Texto limpio:', cleaned)
     return null

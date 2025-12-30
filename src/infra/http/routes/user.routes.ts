@@ -19,10 +19,10 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'password es requerido' })
     }
 
-    // Verificar que no exista otro usuario con el mismo phone
+    // Verificar que no exista otro usuario con el mismo teléfono
     const existing = await userRepository.findByPhone(phone)
     if (existing) {
-      return res.status(409).json({ error: 'El phone ya está registrado' })
+      return res.status(409).json({ error: 'El teléfono ya está registrado' })
     }
 
     // Hashear password
@@ -68,7 +68,7 @@ router.put('/:id', async (req, res) => {
   try {
     const { password, ...rest } = req.body
 
-    // Por ahora, NO permitimos actualizar password desde aquí
+    // Por ahora, NO permitimos actualizar contraseña desde aquí
     if (password) {
       return res.status(400).json({ error: 'Use /auth/change-password para actualizar contraseña' })
     }

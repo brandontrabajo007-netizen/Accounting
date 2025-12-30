@@ -33,12 +33,29 @@ export const makeRegisterPayroll = ({
   resolvePeriodId,
 }: MakeRegisterPayrollDeps) => {
   const registerPayroll = async (input: PayrollEventInput) => {
-    const date = input.date ? new Date(input.date) : new Date()
+    const date = (() => {
+      if (input.date) {
+        const d = new Date(input.date)
+        if (!Number.isNaN(d.getTime())) return d
+      }
+      if (input.periodHint) {
+        const [year, month] = input.periodHint.split('-').map((v) => Number(v))
+        if (year && month && month >= 1 && month <= 12) {
+          return new Date(Date.UTC(year, month - 1, 1))
+        }
+      }
+      return new Date()
+    })()
     if (!input.companyId) {
       throw new Error('companyId is required')
     }
 
-    const periodId = await resolvePeriodId.resolve(input.companyId, input.periodId)
+    const periodId = await resolvePeriodId.resolve(input.companyId, {
+      periodId: input.periodId,
+      date,
+      periodHint: input.periodHint,
+      reopenClosed: input.allowClosedReopen,
+    })
 
     const catalog = await accountRepository.getAll()
 

@@ -7,5 +7,7 @@ export type PurchaseEventInput = {
   supplier?: string | null
   companyId: string | null
   date?: string | null
-  periodId: string
+  periodId?: string
+  periodHint?: string | null
+  allowClosedReopen?: boolean
 }

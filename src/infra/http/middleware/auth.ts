@@ -9,7 +9,7 @@ export const authMiddleware = (req: Request, res: Response, next: NextFunction) 
     return res.status(401).json({ error: 'No autenticado' })
   }
 
-  // 🔍 2. verificar JWT
+  // 🔍 2. Verificar JWT
   const decoded = verifyToken(token)
 
   if (!decoded) {

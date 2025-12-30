@@ -71,9 +71,11 @@ router.post('/reset-balances', authMiddleware, async (req, res) => {
 // 2) Obtener movimientos contables reales (Ledger Movements)
 // GET /ledger/movements/:companyId
 // ---------------------------------------------------------
-router.get('/movements/:companyId', async (req, res) => {
+router.get('/movements/:companyId', authMiddleware, async (req, res) => {
   try {
+    if (!req.user) return res.status(401).json({ status: false, error: 'No autenticado' })
     const { companyId } = req.params
+    if (companyId !== req.user.companyId) return res.status(403).json({ status: false, error: 'Acceso denegado' })
 
     const movements = await LedgerMovementMongoModel.find({ companyId }).sort({ date: -1 }).lean()
 

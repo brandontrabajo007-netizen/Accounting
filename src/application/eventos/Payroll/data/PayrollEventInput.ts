@@ -6,4 +6,6 @@ export interface PayrollEventInput {
   date?: string
   beneficiary?: string
   periodId?: string
+  periodHint?: string
+  allowClosedReopen?: boolean
 }

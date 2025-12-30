@@ -64,6 +64,12 @@ export interface ParsedTelegramPayroll {
   payrollInput: PayrollEventInput
 }
 
+export interface ParsedIncomeStatementQuery {
+  chatId: number
+  companyId: string
+  period: { start: string; end: string }
+}
+
 // -----------------------------------------------------------------------------
 // RESULTADO UNIFICADO DEL DETECTOR DE EVENTOS
 // -----------------------------------------------------------------------------
@@ -74,4 +80,6 @@ export type DetectedEvent =
   | { type: 'purchase_error'; chatId: number }
   | { type: 'payroll'; chatId: number; data: PayrollEventInput }
   | { type: 'payroll_error'; chatId: number }
+  | { type: 'income_statement_query'; chatId: number; companyId: string; period: { start: string; end: string } }
+  | { type: 'income_statement_error'; chatId: number }
   | { type: 'unknown'; chatId: number }

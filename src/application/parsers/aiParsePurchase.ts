@@ -1,19 +1,14 @@
-// src/application/eventos/Purchase/parsers/aiPurchaseParser.ts
-
 import type { PurchaseEventInput } from '@application/eventos/Purchase/data/PurchaseEventInput'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 
 const apiKey = process.env.GEMINI_API_KEY
 if (!apiKey) {
-  throw new Error('❌ Falta la variable de entorno GEMINI_API_KEY')
+  throw new Error('Falta la variable de entorno GEMINI_API_KEY')
 }
 
 const genAI = new GoogleGenerativeAI(apiKey)
 const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
 
-// -----------------------------------------------------------------------------
-// 🧹 Sanear la respuesta de la IA y extraer sólo el JSON
-// -----------------------------------------------------------------------------
 function extractJson(text: string): string {
   if (!text) return ''
 
@@ -30,77 +25,39 @@ function extractJson(text: string): string {
   return text.trim()
 }
 
-// -----------------------------------------------------------------------------
-// TIPOS AUXILIARES
-// -----------------------------------------------------------------------------
 type PurchaseDetailsResult = {
   companyId: null
   description: string | null
   amount: number | null
   includesVAT: boolean
   paymentMethod: 'cash' | 'bank' | 'credit' | null
+  date: string | null
+  periodHint: string | null
 }
 
 type PurchaseCategoryResult = {
   debitAccount: number | null
 }
 
-// -----------------------------------------------------------------------------
-// 🤖 PARSER A: SOLO CLASIFICACIÓN CONTABLE (debitAccount)
-// -----------------------------------------------------------------------------
 export async function aiParsePurchaseCategory(message: string): Promise<PurchaseCategoryResult> {
   const prompt = `
 Eres un PARSEADOR CONTABLE ESTRICTO.
-NO eres chatbot, NO conversas, NO explicas.
-
-Tu ÚNICA tarea es decidir la cuenta contable (debitAccount) según el mensaje.
-
-Debes responder SIEMPRE con SOLO este JSON:
-
+Decide la cuenta contable (debitAccount) según el mensaje.
+Solo responde este JSON sin texto adicional:
 {
   "debitAccount": number | null
 }
 
-CLASIFICACIÓN:
+Clasificación:
+A) "Insumos" → 1435 (materiales/insumos de producción).
+B) "Gastos" → 5195 (gastos operativos generales).
+C) "Servicios" → 5135 (servicios públicos o contratados).
+D) "Propiedades" → 1524 (activos fijos durables).
 
-A) "Insumos" → 1435
-   Materiales usados en producción o transformados.
-   Ejemplos: telas, hilos, cremalleras, botones, empaques, etiquetas, cartón, cajas, bolsas de envío, insumos de producción.
+Casos que NO son compra (nómina, salarios, sueldos, honorarios a colaboradores, prestaciones, liquidaciones) → debitAccount = null.
 
-B) "Gastos" → 5195
-   Gastos generales de operación.
-   Ejemplos: papelería, aseo, dotación, publicidad, transporte, peajes,
-   mensajería, domicilios, limpieza, refrigerios, pequeños mantenimientos.
-
-C) "Servicios" → 5135
-   Servicios públicos o servicios contratados.
-   Ejemplos: luz, agua, internet, celular, hosting, SaaS, contabilidad,
-   honorarios de diseñador, servicios de abogado, servicios de terceros.
-
-D) "Propiedades" → 1524
-   Activos fijos que duran más de un año.
-   Ejemplos: maquinaria, herramientas duraderas, computadores, muebles, equipos.
-
-🚫 CASOS QUE NO SON COMPRA:
-- Pago de nómina
-- Pago de empleados
-- Sueldos
-- Salarios
-- Honorarios recurrentes a colaboradores
-- Prestaciones sociales
-- Liquidaciones laborales
-
-SI el mensaje describe alguno de esos casos, o NO estás seguro de que sea compra,
-RESPONDE:
-
-{
-  "debitAccount": null
-}
-
-MENSAJE A ANALIZAR:
+Mensaje:
 "${message}"
-
-Recuerda: SOLO JSON, sin texto adicional.
   `.trim()
 
   const result = await model.generateContent(prompt)
@@ -114,83 +71,56 @@ Recuerda: SOLO JSON, sin texto adicional.
     }
     return obj
   } catch (err) {
-    console.error('❌ Error parseando JSON de PurchaseCategory:', err)
+    console.error('Error parseando JSON de PurchaseCategory:', err)
     console.error('Texto original:', raw)
     console.error('Texto limpio:', cleaned)
     return { debitAccount: null }
   }
 }
 
-// -----------------------------------------------------------------------------
-// 🤖 PARSER B: DATOS GENERALES (description, amount, IVA, método de pago)
-// -----------------------------------------------------------------------------
 export async function aiParsePurchaseDetails(message: string): Promise<PurchaseDetailsResult | null> {
   const prompt = `
 Eres un PARSEADOR ESTRICTO de mensajes de compras.
-NO eres chatbot. NO conversas. NO inventas datos.
+No conversas. No inventas datos. Devuelves solo JSON.
 
-Debes devolver SOLO este JSON:
-
+Responde exactamente:
 {
   "companyId": null,
   "description": string | null,
   "amount": number | null,
   "includesVAT": boolean,
-  "paymentMethod": "cash" | "bank" | "credit" | null
+  "paymentMethod": "cash" | "bank" | "credit" | null,
+  "date": string | null,
+  "periodHint": string | null
 }
 
-REGLAS:
+Reglas:
+1) amount: valor TOTAL mencionado. Formatos "700.000", "700k", "700 mil", "3.2M". Si no hay número claro → null.
+2) description: frase corta de lo comprado. Si no se puede determinar → null.
+3) includesVAT: "incluye/con iva" → true; "sin/no incluye iva" → false; si no menciona → false (nunca null).
+4) paymentMethod: efectivo/contado → "cash"; banco/transferencia/nequi/daviplata/bancolombia/pse → "bank"; crédito/fiado/por pagar → "credit"; si no se menciona → "cash".
+5) date:
+   - Fecha explícita (2025-11-10, 10/11/2025) → "YYYY-MM-DDT00:00:00Z".
+   - Día+mes sin año (ej: "12 de noviembre") → usa el AÑO ACTUAL y devuelve "YYYY-MM-DDT00:00:00Z".
+   - Solo mes/año (ej: "en noviembre 2025") → date = null y periodHint = "2025-11".
+   - Solo mes sin año (ej: "en noviembre") → date = null y periodHint = "YYYY-11" usando el AÑO ACTUAL.
+   - Sin fecha → null.
+6) periodHint: "YYYY-MM" cuando solo hay mes/año; si no hay pista → null.
+7) companyId siempre null.
 
-1️⃣ amount:
-- Extrae el valor TOTAL de la compra si aparece.
-- Formatos válidos: "700.000", "700k", "700 mil", "3.200.000", "3.2M".
-- Interpreta "mil" como x * 1000, "k" como x * 1000, "M" como x * 1.000.000.
-- Si NO hay número claro, usa null.
-
-2️⃣ description:
-- Resume en una frase corta lo comprado.
-  Ej: "Compra de tela", "Compra de insumos", "Compra cremalleras", "Compra maquinaria".
-- Si no se puede determinar, usa null.
-
-3️⃣ includesVAT:
-- "incluye iva", "con iva", "iva incluido" → true
-- "sin iva", "no incluye iva" → false
-- importante si no habla nada sobre el iva siempre va false
--nunca debes dejar este campo null 
-
-4️⃣ paymentMethod:
-- "de contado", "pagué en efectivo", "en cash" → "cash"
-- "pagué por banco", "transferencia", "nequi", "daviplata", "bancolombia", "pse" → "bank"
-- "a crédito", "queda fiado", "lo debo", "por pagar" → "credit"
-- Si no especifica → cash.
-
-5️⃣ companyId:
-- SIEMPRE debe ir como null.
-- NUNCA inventes IDs de empresa.
-
-🚫 CASOS QUE NO SON COMPRA:
-- Pago de nómina
-- Pago de empleados
-- Sueldos
-- Salarios
-- Honorarios recurrentes de colaboradores
-- Prestaciones sociales
-- Liquidaciones laborales
-
-SI el mensaje describe uno de esos casos, debes devolver EXACTAMENTE:
-
+Si el mensaje es nómina/sueldos/empleados/honorarios de colaboradores/prestaciones/liquidaciones → devuelve:
 {
   "companyId": null,
   "description": null,
   "amount": null,
   "includesVAT": false,
-  "paymentMethod": "cash"
+  "paymentMethod": "cash",
+  "date": null,
+  "periodHint": null
 }
 
-MENSAJE A ANALIZAR:
+Mensaje:
 "${message}"
-
-Devuelve SOLO JSON válido.
   `.trim()
 
   const result = await model.generateContent(prompt)
@@ -199,43 +129,38 @@ Devuelve SOLO JSON válido.
 
   try {
     const obj = JSON.parse(cleaned) as PurchaseDetailsResult
-
-    // Validación mínima
     if (obj === null || typeof obj !== 'object') {
       return null
     }
 
-    // Normalización defensiva
     return {
       companyId: null,
       description: typeof obj.description === 'string' ? obj.description : null,
       amount: typeof obj.amount === 'number' ? obj.amount : null,
       includesVAT: Boolean(obj.includesVAT),
       paymentMethod: obj.paymentMethod === 'cash' || obj.paymentMethod === 'bank' || obj.paymentMethod === 'credit' ? obj.paymentMethod : null,
+      date: typeof obj.date === 'string' ? obj.date : null,
+      periodHint: typeof obj.periodHint === 'string' ? obj.periodHint : null,
     }
   } catch (err) {
-    console.error('❌ Error parseando JSON de PurchaseDetails:', err)
+    console.error('Error parseando JSON de PurchaseDetails:', err)
     console.error('Texto original:', raw)
     console.error('Texto limpio:', cleaned)
     return null
   }
 }
 
-// -----------------------------------------------------------------------------
-// 🤖 PARSER FINAL: COMBINA DETALLES + CUENTA CONTABLE
-// -----------------------------------------------------------------------------
 export async function aiParsePurchase(message: string): Promise<PurchaseEventInput | null> {
   const details = await aiParsePurchaseDetails(message)
 
-  // Si no es compra (por nómina, etc.) o error fuerte → devolvemos null
   if (!details) {
     return null
   }
 
   const category = await aiParsePurchaseCategory(message)
 
-  // Si ambos devuelven "vacío" → no tratar como compra
-  const isEmptyDetails = details.description === null && details.amount === null && details.paymentMethod === null && details.includesVAT === false
+  const isEmptyDetails =
+    details.description === null && details.amount === null && details.paymentMethod === null && details.includesVAT === false && details.date === null && details.periodHint === null
 
   if (isEmptyDetails && category.debitAccount === null) {
     return null
@@ -248,6 +173,8 @@ export async function aiParsePurchase(message: string): Promise<PurchaseEventInp
     includesVAT: details.includesVAT,
     paymentMethod: details.paymentMethod,
     debitAccount: category.debitAccount,
+    date: details.date,
+    periodHint: details.periodHint,
   }
 
   return result

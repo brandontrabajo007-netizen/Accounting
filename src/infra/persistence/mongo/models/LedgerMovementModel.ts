@@ -10,6 +10,7 @@ export interface LedgerMovementDocument extends Document {
   description: string
   companyId: string
   status: MovementStatus
+  periodId?: string
 }
 
 const LedgerMovementSchema = new Schema<LedgerMovementDocument>(
@@ -22,8 +23,12 @@ const LedgerMovementSchema = new Schema<LedgerMovementDocument>(
     description: { type: String, required: true },
     companyId: { type: String, required: true },
     status: { type: String, enum: Object.values(MovementStatus), default: MovementStatus.PROCESSED },
+    periodId: { type: String, required: false },
   },
   { timestamps: true },
 )
+
+LedgerMovementSchema.index({ companyId: 1, accountCode: 1, date: 1 })
+LedgerMovementSchema.index({ companyId: 1, periodId: 1 })
 
 export const LedgerMovementMongoModel: Model<LedgerMovementDocument> = mongoose.models.LedgerMovement ?? mongoose.model<LedgerMovementDocument>('LedgerMovement', LedgerMovementSchema)

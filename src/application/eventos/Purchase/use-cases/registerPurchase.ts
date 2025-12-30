@@ -30,13 +30,30 @@ export const makeRegisterPurchase = ({
   resolvePeriodId,
 }: MakeRegisterPurchaseDeps) => {
   const registerPurchase = async (input: PurchaseEventInput) => {
-    const date = input.date ? new Date(input.date) : new Date()
+    const date = (() => {
+      if (input.date) {
+        const d = new Date(input.date)
+        if (!Number.isNaN(d.getTime())) return d
+      }
+      if (input.periodHint) {
+        const [year, month] = input.periodHint.split('-').map((v) => Number(v))
+        if (year && month && month >= 1 && month <= 12) {
+          return new Date(Date.UTC(year, month - 1, 1))
+        }
+      }
+      return new Date()
+    })()
     const companyId = input.companyId ?? ''
     if (!companyId) {
       throw new Error('companyId is required')
     }
 
-    const periodId = await resolvePeriodId.resolve(companyId, input.periodId)
+    const periodId = await resolvePeriodId.resolve(companyId, {
+      periodId: input.periodId,
+      date,
+      periodHint: input.periodHint ?? undefined,
+      reopenClosed: input.allowClosedReopen,
+    })
 
     await periodAccessGuard.assertWritable(companyId, periodId)
 

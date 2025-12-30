@@ -4,32 +4,27 @@ import type { PurchaseEventInput } from '@application/eventos/Purchase/data/Purc
 import { makeRegisterPurchase } from '@application/eventos/Purchase/use-cases/registerPurchase'
 import type { SaleEventInput } from '@application/eventos/sales/data/SaleEventInput'
 import { makeRegisterSale } from '@application/eventos/sales/use-cases/registerSale'
-
+import { makeGenerateIncomeStatement } from '@application/reports/use-cases/generateIncomeStatement'
+import { AccountingPeriodStatus } from '@domain/accounting-periods/AccountingPeriodStatus'
 import type { Movement } from '@domain/movements'
-
-// Telegram
 import { TelegramAdapter } from '@infra/telegram/telegramAdapter'
 import { TelegramClient } from '@infra/telegram/telegramClient'
-
-// Express
 import express, { type Request, type Response } from 'express'
-
-// Repositorios
 import {
+  accountingPeriodRepository,
   accountRepository,
   journalEntryRepository,
   payrollAccountMappingRepository,
+  periodAccessGuard,
   processJournalEntry,
   purchaseAccountMappingRepository,
+  resolvePeriodId,
   saleAccountMappingRepository,
   userRepository,
-  periodAccessGuard,
-  resolvePeriodId,
 } from '../dependencies'
 
 const router = express.Router()
 
-// Casos de uso
 const { registerSale } = makeRegisterSale({
   accountRepository,
   journalEntryRepository,
@@ -57,21 +52,50 @@ const { registerPayroll } = makeRegisterPayroll({
   resolvePeriodId,
 })
 
-/* ---------------------------------------------------------
-   🔧 Helper: validar chatId
---------------------------------------------------------- */
+const { generateIncomeStatement } = makeGenerateIncomeStatement({
+  accountRepository,
+  journalEntryRepository,
+})
+
 function ensureChatId(chatId: number | null, res: Response): chatId is number {
   if (!chatId) {
-    console.error('❌ No chatId found, no puedo enviar respuesta')
+    console.error('No chatId found, no puedo enviar respuesta')
     res.status(200).json({ ok: true })
     return false
   }
   return true
 }
 
-/* ---------------------------------------------------------
-   📌 WEBHOOK PRINCIPAL TELEGRAM
---------------------------------------------------------- */
+const formatDate = (value: string | number | Date | null | undefined) => {
+  if (value === null || value === undefined) return 'sin fecha'
+  const d = new Date(value)
+  return Number.isNaN(d.getTime()) ? 'sin fecha' : d.toISOString().slice(0, 10)
+}
+
+const formatCurrency = (value: number) =>
+  value.toLocaleString('es-CO', {
+    style: 'currency',
+    currency: 'COP',
+    maximumFractionDigits: 0,
+  })
+
+const getPeriodLabel = async (companyId: string, periodId?: string | null) => {
+  if (!periodId) return 'no asignado'
+  const period = await accountingPeriodRepository.findById(periodId)
+  if (!period || period.companyId !== companyId) return periodId
+  return period.name ?? period.id
+}
+
+const markPeriodPendingIfReopened = async (companyId: string, targetPeriodId?: string | null) => {
+  const meta = resolvePeriodId.getLastResolutionMeta()
+  if (!meta || !meta.reopenedClosed) return
+  if (targetPeriodId && meta.periodId !== targetPeriodId) return
+  const period = await accountingPeriodRepository.findById(meta.periodId)
+  if (!period || period.companyId !== companyId) return
+  if (period.status === AccountingPeriodStatus.CREATED) return
+  await accountingPeriodRepository.save({ ...period, status: AccountingPeriodStatus.CREATED })
+}
+
 router.post('/webhook', async (req: Request, res: Response) => {
   const update = req.body
   const chatId: number | null = update?.message?.chat?.id ?? null
@@ -83,142 +107,229 @@ router.post('/webhook', async (req: Request, res: Response) => {
 
     if (!detected) return res.status(200).json({ ok: true })
 
-    /* ---------------------------------------------------------
-       🟦 CASO 1: VENTA
-    --------------------------------------------------------- */
+    // -----------------------------------------------------------------
+    // VENTA
+    // -----------------------------------------------------------------
     if (detected.type === 'sale') {
-      const saleInput = detected.data as SaleEventInput
+      try {
+        const saleInput = { ...(detected.data as SaleEventInput), allowClosedReopen: true }
+        const previousOpen = await accountingPeriodRepository.findOpenByCompany(saleInput.companyId)
+        const result = await registerSale(saleInput)
 
-      const result = await registerSale(saleInput)
+        const movementsText = result.movements
+          .map((m: Movement) => {
+            const side = m.type === 'debit' ? 'Debe' : 'Haber'
+            return `${side} *${m.accountName}:* ${m.amount}`
+          })
+          .join('\n')
 
-      const movementsText = result.movements
-        .map((m: Movement) => {
-          const side = m.type === 'debit' ? '🔺 Debe' : '🔻 Haber'
-          return `${side} *${m.accountName}:* ${m.amount}`
-        })
-        .join('\n')
-
-      const isPending = result.status === 'pending'
-      const statusIcon = isPending ? '⚠️' : '✅'
-      const statusText = isPending ? '*Borrador guardado (Incompleto)*' : '*Venta registrada correctamente*'
-
-      const summary = `
+        const isPending = result.status === 'pending'
+        const statusIcon = isPending ? '⌛️' : '✅'
+        const statusText = isPending ? '*Borrador guardado (Incompleto)*' : '*Venta registrada correctamente*'
+        const periodLabel = await getPeriodLabel(saleInput.companyId, result.periodId)
+        const summary = `
 ${statusIcon} ${statusText}
 
-*Descripción:* ${result.description}
+*Descripcion:* ${result.description}
 *Total:* ${saleInput.totalAmount}
+*Fecha del asiento:* ${formatDate(result.date)}
+*Periodo:* ${periodLabel}
 
 *Movimientos contables:*
 ${movementsText}
 
 ${isPending ? '_Completa los datos faltantes en el panel administrativo._' : ''}
-      `.trim()
+        `.trim()
 
-      if (!ensureChatId(chatId, res)) return
+        if (!ensureChatId(chatId, res)) return
 
-      await TelegramClient.sendMessage({
-        chatId,
-        text: summary,
-        parseMode: 'Markdown',
-      })
+        await TelegramClient.sendMessage({
+          chatId,
+          text: summary,
+          parseMode: 'Markdown',
+        })
 
-      return res.status(200).json({ ok: true })
+        if (previousOpen.length > 0 && previousOpen[0].id !== result.periodId) {
+          await accountingPeriodRepository.markOpenExclusive(saleInput.companyId, previousOpen[0].id)
+        }
+        await markPeriodPendingIfReopened(saleInput.companyId, result.periodId)
+
+        return res.status(200).json({ ok: true })
+      } catch (err) {
+        if (!ensureChatId(chatId, res)) return
+        const message = err instanceof Error ? err.message : 'Error interno registrando la venta'
+        await TelegramClient.sendMessage({ chatId, text: `No pude registrar la venta: ${message}` })
+        return res.status(200).json({ ok: true })
+      }
     }
 
-    /* ---------------------------------------------------------
-       🟩 CASO 2: COMPRA
-    --------------------------------------------------------- */
+    // -----------------------------------------------------------------
+    // COMPRA
+    // -----------------------------------------------------------------
     if (detected.type === 'purchase') {
-      const purchaseInput = detected.data as PurchaseEventInput
+      try {
+        const purchaseInput = { ...(detected.data as PurchaseEventInput), allowClosedReopen: true }
+        const previousOpen = purchaseInput.companyId ? await accountingPeriodRepository.findOpenByCompany(purchaseInput.companyId) : []
 
-      const result = await registerPurchase(purchaseInput)
+        const result = await registerPurchase(purchaseInput)
 
-      const movementsText = result.movements
-        .map((m) => {
-          const side = m.type === 'debit' ? '🔺 Debe' : '🔻 Haber'
-          return `${side} *${m.accountName}:* ${m.amount}`
-        })
-        .join('\n')
+        const movementsText = result.movements
+          .map((m) => {
+            const side = m.type === 'debit' ? 'Debe' : 'Haber'
+            return `${side} *${m.accountName}:* ${m.amount}`
+          })
+          .join('\n')
 
-      const isPending = result.status === 'pending'
-      const statusIcon = isPending ? '⚠️' : '✅'
-      const statusText = isPending ? '*Borrador de Compra (Incompleto)*' : '*Compra registrada correctamente*'
+        const isPending = result.status === 'pending'
+        const statusIcon = isPending ? '⌛️' : '✅'
+        const statusText = isPending ? '*Borrador de Compra (Incompleto)*' : '*Compra registrada correctamente*'
+        const periodLabel = purchaseInput.companyId ? await getPeriodLabel(purchaseInput.companyId, result.periodId) : 'no asignado'
 
-      const summary = `
+        const summary = `
 ${statusIcon} ${statusText}
 
-*Descripción:* ${result.description}
+*Descripcion:* ${result.description}
 *Total:* ${purchaseInput.amount}
+*Fecha del asiento:* ${formatDate(result.date)}
+*Periodo:* ${periodLabel}
 
 *Movimientos contables:*
 ${movementsText}
 
 ${isPending ? '_Completa los detalles en el panel administrativo._' : ''}
-      `.trim()
+        `.trim()
 
-      if (!ensureChatId(chatId, res)) return
+        if (!ensureChatId(chatId, res)) return
 
-      await TelegramClient.sendMessage({
-        chatId,
-        text: summary,
-        parseMode: 'Markdown',
-      })
+        await TelegramClient.sendMessage({
+          chatId,
+          text: summary,
+          parseMode: 'Markdown',
+        })
 
-      return res.status(200).json({ ok: true })
+        if (purchaseInput.companyId && previousOpen.length > 0 && previousOpen[0].id !== result.periodId) {
+          await accountingPeriodRepository.markOpenExclusive(purchaseInput.companyId, previousOpen[0].id)
+        }
+        if (purchaseInput.companyId) {
+          await markPeriodPendingIfReopened(purchaseInput.companyId, result.periodId)
+        }
+
+        return res.status(200).json({ ok: true })
+      } catch (err) {
+        if (!ensureChatId(chatId, res)) return
+        const message = err instanceof Error ? err.message : 'Error interno registrando la compra'
+        await TelegramClient.sendMessage({ chatId, text: `No pude registrar la compra: ${message}` })
+        return res.status(200).json({ ok: true })
+      }
     }
 
-    /* ---------------------------------------------------------
-       🟨 CASO 3: PAYROLL — Nómina / Mano de obra
-    --------------------------------------------------------- */
+    // -----------------------------------------------------------------
+    // PAYROLL
+    // -----------------------------------------------------------------
     if (detected.type === 'payroll') {
-      const payrollInput = detected.data as PayrollEventInput
+      try {
+        const payrollInput = { ...(detected.data as PayrollEventInput), allowClosedReopen: true }
+        const previousOpen = await accountingPeriodRepository.findOpenByCompany(payrollInput.companyId)
 
-      const result = await registerPayroll(payrollInput)
+        const result = await registerPayroll(payrollInput)
 
-      const movementsText = result.movements
-        .map((m) => {
-          const side = m.type === 'debit' ? '🔺 Debe' : '🔻 Haber'
-          return `${side} *${m.accountName}:* ${m.amount}`
-        })
-        .join('\n')
+        const movementsText = result.movements
+          .map((m) => {
+            const side = m.type === 'debit' ? 'Debe' : 'Haber'
+            return `${side} *${m.accountName}:* ${m.amount}`
+          })
+          .join('\n')
 
-      const isPending = result.status === 'pending'
-      const statusIcon = isPending ? '⚠️' : '✅'
-      const statusText = isPending ? '*Borrador de Nómina (Incompleto)*' : '*Pago de nómina registrado*'
+        const isPending = result.status === 'pending'
+        const statusIcon = isPending ? '⌛️' : '✅'
+        const statusText = isPending ? '*Borrador de Nomina (Incompleto)*' : '*Pago de nomina registrado*'
+        const periodLabel = await getPeriodLabel(payrollInput.companyId, result.periodId)
 
-      const summary = `
+        const summary = `
 ${statusIcon} ${statusText}
 
-*Descripción:* ${result.description}
+*Descripcion:* ${result.description}
 *Total:* ${payrollInput.amount}
+*Fecha del asiento:* ${formatDate(result.date)}
+*Periodo:* ${periodLabel}
 
 *Movimientos contables:*
 ${movementsText}
 
-${isPending ? '_Recuerda completar la información en el panel._' : ''}
-      `.trim()
+${isPending ? '_Recuerda completar la informacion en el panel._' : ''}
+        `.trim()
 
+        if (!ensureChatId(chatId, res)) return
+
+        await TelegramClient.sendMessage({
+          chatId,
+          text: summary,
+          parseMode: 'Markdown',
+        })
+
+        if (previousOpen.length > 0 && previousOpen[0].id !== result.periodId) {
+          await accountingPeriodRepository.markOpenExclusive(payrollInput.companyId, previousOpen[0].id)
+        }
+        await markPeriodPendingIfReopened(payrollInput.companyId, result.periodId)
+
+        return res.status(200).json({ ok: true })
+      } catch (err) {
+        if (!ensureChatId(chatId, res)) return
+        const message = err instanceof Error ? err.message : 'Error interno registrando la nomina'
+        await TelegramClient.sendMessage({ chatId, text: `No pude registrar la nomina: ${message}` })
+        return res.status(200).json({ ok: true })
+      }
+    }
+
+    // -----------------------------------------------------------------
+    // CONSULTA ESTADO DE RESULTADOS RÁPIDO (hoy/semana/mes)
+    // -----------------------------------------------------------------
+    if (detected.type === 'income_statement_query') {
+      try {
+        const { period, companyId } = detected
+        if (!period) throw new Error('Periodo no definido')
+
+        const result = await generateIncomeStatement(companyId, { start: period.start, end: period.end })
+        const net = result.totals.incomeBeforeTaxes
+        const verb = net >= 0 ? 'Ganaste' : 'Perdiste'
+        const amount = formatCurrency(Math.abs(net))
+
+        if (!ensureChatId(chatId, res)) return
+
+        await TelegramClient.sendMessage({
+          chatId,
+          text: `${verb} ${amount} entre ${period.start} y ${period.end}`,
+          parseMode: 'Markdown',
+        })
+
+        return res.status(200).json({ ok: true })
+      } catch (err) {
+        if (!ensureChatId(chatId, res)) return
+        const message = err instanceof Error ? err.message : 'No pude calcular la utilidad'
+        await TelegramClient.sendMessage({ chatId, text: `No pude calcular la utilidad: ${message}` })
+        return res.status(200).json({ ok: true })
+      }
+    }
+
+    if (detected.type === 'income_statement_error') {
       if (!ensureChatId(chatId, res)) return
-
       await TelegramClient.sendMessage({
         chatId,
-        text: summary,
-        parseMode: 'Markdown',
+        text: 'No pude entender el periodo. Dime: "cuánto gané hoy", "esta semana" o "este mes".',
       })
-
       return res.status(200).json({ ok: true })
     }
 
-    /* ---------------------------------------------------------
-       🟥 ERROR VENTA
-    --------------------------------------------------------- */
+    // -----------------------------------------------------------------
+    // ERRORES DE PARSEO
+    // -----------------------------------------------------------------
     if (detected.type === 'sale_error') {
       if (!ensureChatId(chatId, res)) return
 
       await TelegramClient.sendMessage({
         chatId,
         text: `
-❗ No logré entender la venta.  
+No logre entender la venta.
 Debes indicar cantidad, producto, precio, costo y si incluye IVA.
         `.trim(),
         parseMode: 'Markdown',
@@ -227,17 +338,14 @@ Debes indicar cantidad, producto, precio, costo y si incluye IVA.
       return res.status(200).json({ ok: true })
     }
 
-    /* ---------------------------------------------------------
-       🟧 ERROR COMPRA
-    --------------------------------------------------------- */
     if (detected.type === 'purchase_error') {
       if (!ensureChatId(chatId, res)) return
 
       await TelegramClient.sendMessage({
         chatId,
         text: `
-❗ No logré entender la compra.  
-Ejemplo: "Compré tela por 700.000 sin IVA, pagado por banco, es insumo".
+No logre entender la compra.
+Ejemplo: "Compre tela por 700.000 sin IVA, pagado por banco, es insumo".
         `.trim(),
         parseMode: 'Markdown',
       })
@@ -245,19 +353,16 @@ Ejemplo: "Compré tela por 700.000 sin IVA, pagado por banco, es insumo".
       return res.status(200).json({ ok: true })
     }
 
-    /* ---------------------------------------------------------
-       🟨 ERROR PAYROLL
-    --------------------------------------------------------- */
     if (detected.type === 'payroll_error') {
       if (!ensureChatId(chatId, res)) return
 
       await TelegramClient.sendMessage({
         chatId,
         text: `
-❗ No logré entender el pago de nómina.  
-Ejemplos:  
-• pagué nómina 500000 por banco  
-• pagué empleados 700000 en efectivo  
+No logre entender el pago de nomina.
+Ejemplos:
+- pague nomina 500000 por banco
+- pague empleados 700000 en efectivo
         `.trim(),
         parseMode: 'Markdown',
       })
@@ -265,25 +370,25 @@ Ejemplos:
       return res.status(200).json({ ok: true })
     }
 
-    /* ---------------------------------------------------------
-       ❓ MENSAJE NO CLASIFICADO
-    --------------------------------------------------------- */
+    // -----------------------------------------------------------------
+    // MENSAJE NO CLASIFICADO
+    // -----------------------------------------------------------------
     if (detected.type === 'unknown') {
       if (!ensureChatId(chatId, res)) return
 
       await TelegramClient.sendMessage({
         chatId,
         text: `
-No reconozco si tu mensaje es *venta*, *compra* o *pago de nómina*.
+No reconozco si tu mensaje es venta, compra o pago de nomina.
 
-💰 Venta:
-"Vendí 10 pantalones a 50.000 me cuesta 36.000"
+Venta:
+"Vendi 10 pantalones a 50.000 me cuesta 36.000"
 
-🧾 Compra:
-"Compré cremalleras por 300.000 sin IVA en efectivo"
+Compra:
+"Compre cremalleras por 300.000 sin IVA en efectivo"
 
-👥 Nómina:
-"pagué nómina 500000 por banco"
+Nomina:
+"pague nomina 500000 por banco"
         `.trim(),
         parseMode: 'Markdown',
       })
@@ -291,12 +396,12 @@ No reconozco si tu mensaje es *venta*, *compra* o *pago de nómina*.
 
     return res.status(200).json({ ok: true })
   } catch (error) {
-    console.error('❌ Error manejando webhook:', error)
+    console.error('Error manejando webhook:', error)
 
     if (ensureChatId(chatId, res)) {
       TelegramClient.sendMessage({
         chatId,
-        text: '❌ Error interno procesando tu mensaje.',
+        text: 'Error interno procesando tu mensaje.',
       })
     }
 

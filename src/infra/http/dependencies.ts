@@ -7,6 +7,7 @@ import { MongoIncomeStatementRepository } from '@infra/persistence/mongo/reposit
 import { MongoJournalEntryRepository } from '@infra/persistence/mongo/repositories/MongoJournalEntryRepository'
 import { MongoPayrollAccountMappingRepository } from '@infra/persistence/mongo/repositories/MongoPayrollAccountMappingRepository'
 import { MongoPurchaseAccountMappingRepository } from '@infra/persistence/mongo/repositories/MongoPurchaseAccountMappingRepository'
+import { MongoLedgerMovementRepository } from '@infra/persistence/mongo/repositories/MongoLedgerMovementRepository'
 import { MongoSaleAccountMappingRepository } from '@infra/persistence/mongo/repositories/MongoSaleAccountMappingRepository'
 import { MongoUserRepository } from '@infra/persistence/mongo/repositories/MongoUserRepository'
 import { makeMongoAccountingPeriodRepository } from '@infra/persistence/mongo/repositories/makeMongoAccountingPeriodRepository'
@@ -17,6 +18,7 @@ import { makeInMemoryDomainEventBus } from '@infra/events/makeInMemoryDomainEven
 import { makeOnAccountingPeriodClosedCreateLedgerSnapshot } from '@application/accounting-periods/handlers/onAccountingPeriodClosedCreateLedgerSnapshot'
 import { makeOnAccountingPeriodClosedCreateClosingEntry } from '@application/accounting-periods/handlers/onAccountingPeriodClosedCreateClosingEntry'
 import { makeResolvePeriodId } from '@application/accounting-periods/services/resolvePeriodId'
+import { pdfkitReportPdfGenerator } from '@infra/pdf/pdfkitReportPdfGenerator'
 
 // ------------------------------------
 // SINGLETONS
@@ -34,8 +36,10 @@ export const accountingPeriodRepository = makeMongoAccountingPeriodRepository()
 export const periodResultRepository = makeMongoPeriodResultRepository()
 export const ledgerSnapshotRepository = makeMongoLedgerSnapshotRepository()
 export const transactionRunner = makeMongoTransactionRunner()
+export const ledgerMovementRepository = new MongoLedgerMovementRepository()
 export const periodAccessGuard = makePeriodAccessGuard(accountingPeriodRepository)
 export const resolvePeriodId = makeResolvePeriodId(accountingPeriodRepository)
+export const reportPdfGenerator = pdfkitReportPdfGenerator()
 const equityAccountCode = Number(process.env.EQUITY_ACCOUNT_CODE ?? 3605)
 const closingEntryHandler = makeOnAccountingPeriodClosedCreateClosingEntry({
   journalEntryRepository,
