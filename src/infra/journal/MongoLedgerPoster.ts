@@ -32,7 +32,7 @@ export class MongoLedgerPoster implements LedgerPoster {
       if (!shouldApply) continue
 
       if (movement.amount <= 0) {
-        if (mutateMovements) movement.status = MovementStatus.PENDING
+        if (mutateMovements && movement.status !== MovementStatus.PROCESSED) movement.status = MovementStatus.PENDING
         continue
       }
 

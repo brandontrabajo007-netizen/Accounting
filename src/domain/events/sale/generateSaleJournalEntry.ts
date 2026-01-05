@@ -38,12 +38,14 @@ export const generateSaleJournalEntry = (event: SaleEvent, accounts: SaleAccount
     vat = totalAmount - base
   }
 
+  const vatStatus = vat > 0 ? MovementStatus.PROCESSED : MovementStatus.PROCESSED
+
   movements.push({
     accountCode: vatAccount ?? 0,
     accountName: getAccountName(accountsCatalog, vatAccount ?? 0),
     type: TransactionTypes.CREDIT,
     amount: event.includesVAT ? vat : 0,
-    status: vat > 0 ? MovementStatus.CREATED : MovementStatus.PENDING,
+    status: vatStatus,
     group: 'REVENUE',
   })
 

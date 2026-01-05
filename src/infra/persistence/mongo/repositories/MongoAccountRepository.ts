@@ -44,4 +44,15 @@ export class MongoAccountRepository implements AccountRepository {
     const filter = accountCodes?.length ? { code: { $in: accountCodes } } : {}
     await AccountModel.updateMany(filter, { $set: { [`currentBalanceByCompany.${companyId}`]: 0 } })
   }
+
+  async setBalance(companyId: string, accountCode: number, value: number): Promise<void> {
+    const result = await AccountModel.updateOne(
+      { code: accountCode },
+      { $set: { [`currentBalanceByCompany.${companyId}`]: value } },
+    )
+
+    if (result.matchedCount === 0) {
+      throw new Error(`Account ${accountCode} not found`)
+    }
+  }
 }

@@ -6,14 +6,7 @@ import { aiParseSale } from '@application/parsers/aiSaleParser'
 import type { UserRepository } from '@application/shared/ports/UserRepository'
 import { TelegramClient } from './telegramClient'
 
-import type {
-  DetectedEvent,
-  ParsedIncomeStatementQuery,
-  ParsedTelegramPayroll,
-  ParsedTelegramPurchase,
-  ParsedTelegramSale,
-  TelegramUpdate,
-} from './telegramTypes'
+import type { DetectedEvent, ParsedIncomeStatementQuery, ParsedTelegramPayroll, ParsedTelegramPurchase, ParsedTelegramSale, TelegramUpdate } from './telegramTypes'
 
 // Normaliza fecha/periodo cuando el usuario no menciona año: asume el año actual
 const applyCurrentYearIfMissing = (rawText: string, input: { date?: string | null; periodHint?: string | null }) => {
@@ -258,9 +251,21 @@ export const TelegramAdapter = {
   async detectAndParse(update: TelegramUpdate, deps: { userRepository: UserRepository }): Promise<DetectedEvent | null> {
     const message = update.message
     const chatId = message?.chat?.id
+    if (!message || !chatId) return null
+
+    const user = await deps.userRepository.findByTelegramId(chatId)
+    if (!user) {
+      console.warn(`[Telegram] chatId sin usuario asignado: ${chatId}`)
+      await TelegramClient.sendMessage({
+        chatId,
+        text: `No tienes un usuario asignado. Envia este ID a soporte: ${chatId}`,
+      })
+      return null
+    }
+
     const text = await this.getMessageText(message)
 
-    if (!text || !chatId) return null
+    if (!text) return null
 
     const classification = await aiClassifyEvent(text)
     console.log('📊 Clasificación IA:', classification)
@@ -288,9 +293,6 @@ export const TelegramAdapter = {
 
     // --- INCOME STATEMENT QUERY ---
     if (classification === 'income_statement_query') {
-      const user = await deps.userRepository.findByTelegramId(chatId)
-      if (!user) return { type: 'income_statement_error', chatId }
-
       const period = this.parseIncomeStatementPeriod(text)
       if (!period) return { type: 'income_statement_error', chatId }
 
