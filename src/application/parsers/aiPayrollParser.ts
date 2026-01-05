@@ -38,7 +38,7 @@ Reglas:
 1) Solo aplica si es pago a empleados internos (nómina, salario, auxiliar, bodeguero, conductor, etc.). Si es taller externo, maquila, tintorería, terceros → devuelve null.
 2) amount: número mencionado (ej: "pagué 500000", "nómina 1.200.000"). Si no hay → null.
 3) description: refleja pago de nómina o a empleado. Si no se puede → null.
-4) paymentMethod: efectivo/contado/caja → "cash"; banco/transferencia/nequi/daviplata → "bank"; no mencionado → null.
+4) paymentMethod: efectivo/contado/caja → "cash"; banco/transferencia/nequi/daviplata → "bank"; no mencionado → "cash".
 5) date:
    - Fecha explícita (2025-11-10, 10/11/2025) → "YYYY-MM-DDT00:00:00Z".
    - Día+mes sin año (ej: "12 de noviembre") → usa el AÑO ACTUAL y devuelve "YYYY-MM-DDT00:00:00Z".

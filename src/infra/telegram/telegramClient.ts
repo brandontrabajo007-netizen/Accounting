@@ -12,7 +12,13 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY
 if (!GEMINI_API_KEY) throw new Error('❌ Falta GEMINI_API_KEY en .env')
 
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY)
-const transcriberModel = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
+const transcriberModel = genAI.getGenerativeModel({
+  model: 'gemini-2.0-flash',
+  generationConfig: {
+    responseMimeType: 'text/plain',
+    temperature: 0,
+  },
+})
 
 export interface TelegramSendMessagePayload {
   chatId: number
@@ -79,8 +85,11 @@ export const TelegramClient = {
             role: 'user',
             parts: [
               {
+                text: 'Transcribe exactamente el audio a texto en español. No agregues preguntas ni comentarios.',
+              },
+              {
                 inlineData: {
-                  mimeType: 'audio/ogg',
+                  mimeType: 'audio/ogg; codecs=opus',
                   data: Buffer.from(bytes).toString('base64'),
                 },
               },
