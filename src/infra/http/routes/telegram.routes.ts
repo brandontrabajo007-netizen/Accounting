@@ -98,6 +98,12 @@ Con mis superpoderes puedo:
 ¡Cuéntame qué vendiste, compraste o pagaste! 🚀
 `.trim()
 
+const formatHelpMessage = (name?: string) => {
+  const trimmed = name?.trim()
+  if (!trimmed) return helpMessage
+  return helpMessage.replace('Hola!', `Hola ${trimmed}!`)
+}
+
 function ensureChatId(chatId: number | null, res: Response): chatId is number {
   if (!chatId) {
     console.error('No chatId found, no puedo enviar respuesta')
@@ -145,9 +151,10 @@ router.post('/webhook', async (req: Request, res: Response) => {
     const rawText = await TelegramAdapter.getMessageText(update?.message)
     if (rawText && isGreetingOrHelp(rawText)) {
       if (!ensureChatId(chatId, res)) return
+      const userName = (await userRepository.findByTelegramId(chatId))?.name
       await TelegramClient.sendMessage({
         chatId,
-        text: helpMessage,
+        text: formatHelpMessage(userName),
         parseMode: 'Markdown',
       })
       return res.status(200).json({ ok: true })
