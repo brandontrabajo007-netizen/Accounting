@@ -43,7 +43,7 @@ router.post('/login', async (req, res) => {
       httpOnly: true,
       sameSite: 'lax',
       secure: false,
-      maxAge: 1000 * 60 * 60 * 2,
+      maxAge: 1000 * 60 * 60 * 12,
     })
 
     const { password: _omit, ...safeUser } = user

@@ -57,6 +57,47 @@ const { generateIncomeStatement } = makeGenerateIncomeStatement({
   journalEntryRepository,
 })
 
+const normalizeText = (value: string) =>
+  value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+
+const looksLikeAccountingEvent = (value: string) => {
+  const text = normalizeText(value)
+  return /\b(vendi|vendio|venta|compre|compra|pague|pago|nomina|salario|ingreso|estado de resultados|utilidad|ganancia|perdi|perdida)\b/.test(text)
+}
+
+const isGreetingOrHelp = (value: string) => {
+  const text = normalizeText(value)
+  if (looksLikeAccountingEvent(text)) return false
+  const greeting = /\b(hola|buenas|buenos dias|buenas tardes|buenas noches|hey)\b/.test(text)
+  const help = /\b(que puedes hacer|como te uso|como funciona|ayuda|help|no entiendo|no entendi|no se|no se que hacer)\b/.test(text)
+  return greeting || help
+}
+
+const helpMessage = `
+👋 ¡Hola! Soy tu asistente contable 🤖
+
+Con mis superpoderes puedo:
+📊 Registrar ventas, compras y pagos de nómina
+💰 Consultar tu utilidad al instante (hoy, esta semana, este mes, este año)
+
+*¿Cómo me usas?* 
+
+💵 *Venta:*
+"Vendí 10 pantalones a 50.000 me cuesta 36.000"
+
+📦 *Compra:*
+"Compré tela por 700.000 sin IVA en efectivo"
+
+👥 *Nómina:*
+"Pagué nómina 500000 por banco"
+
+¡Cuéntame qué vendiste, compraste o pagaste! 🚀
+`.trim()
+
 function ensureChatId(chatId: number | null, res: Response): chatId is number {
   if (!chatId) {
     console.error('No chatId found, no puedo enviar respuesta')
@@ -101,6 +142,17 @@ router.post('/webhook', async (req: Request, res: Response) => {
   const chatId: number | null = update?.message?.chat?.id ?? null
 
   try {
+    const rawText = await TelegramAdapter.getMessageText(update?.message)
+    if (rawText && isGreetingOrHelp(rawText)) {
+      if (!ensureChatId(chatId, res)) return
+      await TelegramClient.sendMessage({
+        chatId,
+        text: helpMessage,
+        parseMode: 'Markdown',
+      })
+      return res.status(200).json({ ok: true })
+    }
+
     const detected = await TelegramAdapter.detectAndParse(update, {
       userRepository,
     })
@@ -116,12 +168,18 @@ router.post('/webhook', async (req: Request, res: Response) => {
         const previousOpen = await accountingPeriodRepository.findOpenByCompany(saleInput.companyId)
         const result = await registerSale(saleInput)
 
-        const movementsText = result.movements
-          .map((m: Movement) => {
-            const side = m.type === 'debit' ? 'Debe' : 'Haber'
-            return `${side} *${m.accountName}:* ${m.amount}`
-          })
-          .join('\n')
+        const entradas = result.movements.filter((m: Movement) => m.type === 'debit')
+        const salidas = result.movements.filter((m: Movement) => m.type !== 'debit')
+
+        const entradasText = entradas.map((m) => `+ ${m.accountName}: ${formatCurrency(m.amount)}`).join('\n')
+
+        const salidasText = salidas.map((m) => `- ${m.accountName}: ${formatCurrency(m.amount)}`).join('\n')
+
+        const movementsText = []
+        if (entradas.length > 0) movementsText.push(`Entradas 🟢:\n${entradasText}`)
+        if (salidas.length > 0) movementsText.push(`Salidas 🔴:\n${salidasText}`)
+
+        const movementsTextFinal = movementsText.join('\n\n')
 
         const isPending = result.status === 'pending'
         const statusIcon = isPending ? '⌛️' : '✅'
@@ -136,7 +194,7 @@ ${statusIcon} ${statusText}
 *Periodo:* ${periodLabel}
 
 *Movimientos contables:*
-${movementsText}
+${movementsTextFinal}
 
 ${isPending ? '_Completa los datos faltantes en el panel administrativo._' : ''}
         `.trim()
@@ -173,12 +231,18 @@ ${isPending ? '_Completa los datos faltantes en el panel administrativo._' : ''}
 
         const result = await registerPurchase(purchaseInput)
 
-        const movementsText = result.movements
-          .map((m) => {
-            const side = m.type === 'debit' ? 'Debe' : 'Haber'
-            return `${side} *${m.accountName}:* ${m.amount}`
-          })
-          .join('\n')
+        const entradas = result.movements.filter((m) => m.type === 'debit')
+        const salidas = result.movements.filter((m) => m.type !== 'debit')
+
+        const entradasText = entradas.map((m) => `+ ${m.accountName}: ${formatCurrency(m.amount)}`).join('\n')
+
+        const salidasText = salidas.map((m) => `- ${m.accountName}: ${formatCurrency(m.amount)}`).join('\n')
+
+        const movementsText = []
+        if (entradas.length > 0) movementsText.push(`Entradas 🟢:\n${entradasText}`)
+        if (salidas.length > 0) movementsText.push(`Salidas 🔴:\n${salidasText}`)
+
+        const movementsTextFinal = movementsText.join('\n\n')
 
         const isPending = result.status === 'pending'
         const statusIcon = isPending ? '⌛️' : '✅'
@@ -194,7 +258,7 @@ ${statusIcon} ${statusText}
 *Periodo:* ${periodLabel}
 
 *Movimientos contables:*
-${movementsText}
+${movementsTextFinal}
 
 ${isPending ? '_Completa los detalles en el panel administrativo._' : ''}
         `.trim()
@@ -233,12 +297,18 @@ ${isPending ? '_Completa los detalles en el panel administrativo._' : ''}
 
         const result = await registerPayroll(payrollInput)
 
-        const movementsText = result.movements
-          .map((m) => {
-            const side = m.type === 'debit' ? 'Debe' : 'Haber'
-            return `${side} *${m.accountName}:* ${m.amount}`
-          })
-          .join('\n')
+        const entradas = result.movements.filter((m) => m.type === 'debit')
+        const salidas = result.movements.filter((m) => m.type !== 'debit')
+
+        const entradasText = entradas.map((m) => `+ ${m.accountName}: ${formatCurrency(m.amount)}`).join('\n')
+
+        const salidasText = salidas.map((m) => `- ${m.accountName}: ${formatCurrency(m.amount)}`).join('\n')
+
+        const movementsText = []
+        if (entradas.length > 0) movementsText.push(`Entradas 🟢:\n${entradasText}`)
+        if (salidas.length > 0) movementsText.push(`Salidas 🔴:\n${salidasText}`)
+
+        const movementsTextFinal = movementsText.join('\n\n')
 
         const isPending = result.status === 'pending'
         const statusIcon = isPending ? '⌛️' : '✅'
@@ -254,7 +324,7 @@ ${statusIcon} ${statusText}
 *Periodo:* ${periodLabel}
 
 *Movimientos contables:*
-${movementsText}
+${movementsTextFinal}
 
 ${isPending ? '_Recuerda completar la informacion en el panel._' : ''}
         `.trim()
@@ -315,7 +385,7 @@ ${isPending ? '_Recuerda completar la informacion en el panel._' : ''}
       if (!ensureChatId(chatId, res)) return
       await TelegramClient.sendMessage({
         chatId,
-        text: 'No pude entender el periodo. Dime: "cuánto gané hoy", "esta semana" o "este mes".',
+        text: 'No pude entender el periodo. Dime: "cuánto gané hoy", "esta semana", "este mes" o "este año".',
       })
       return res.status(200).json({ ok: true })
     }

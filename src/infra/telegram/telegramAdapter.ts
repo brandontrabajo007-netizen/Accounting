@@ -109,6 +109,18 @@ export const TelegramAdapter = {
   parseIncomeStatementPeriod(text: string): ParsedIncomeStatementQuery['period'] | null {
     const lower = text.toLowerCase()
 
+    // Rango explicito: "del 22 de diciembre al 28 de diciembre" o "2024-12-22 al 2024-12-28"
+    const rangeMatch = lower.match(/del\s+(.+?)\s+al\s+(.+)/i)
+    if (rangeMatch) {
+      const fromText = rangeMatch[1]
+      const toText = rangeMatch[2]
+      const startDate = parseSpanishDate(fromText)
+      const endDate = parseSpanishDate(toText)
+      if (startDate && endDate) {
+        return { start: toDateString(startDate), end: toDateString(endDate) }
+      }
+    }
+
     // Día específico: "día 24 de diciembre", "el 2025-12-24"
     const singleDayMatch = lower.match(/(?:^|\b)(?:el\s+|d[ií]a\s+)?(\d{1,2}\s+de\s+[a-záéíóúñ]+(?:\s+de\s+\d{4})?|\d{4}-\d{2}-\d{2})/)
     if (singleDayMatch) {
@@ -116,8 +128,11 @@ export const TelegramAdapter = {
       if (date) return { start: toDateString(date), end: toDateString(date) }
     }
 
-    // Mes específico: "mes de enero", "enero 2025"
-    const monthMatch = lower.match(/mes\s+de\s+([a-záéíóúñ]+)(?:\s+de\s+(\d{4}))?/) || lower.match(/\b([a-záéíóúñ]+)\s+(\d{4})?\s*$/)
+    // Mes específico: "mes de enero", "el mes de febrero", "en febrero", "enero 2025"
+    const monthMatch =
+      lower.match(/(?:el\s+)?mes\s+de\s+([a-záéíóúñ]+)(?:\s+de\s+(\d{4}))?/) ||
+      lower.match(/\ben\s+([a-záéíóúñ]+)(?:\s+(\d{4}))?\b/) ||
+      lower.match(/\b([a-záéíóúñ]+)\s+(\d{4})?\s*$/)
     if (monthMatch) {
       const name = (monthMatch[1] ?? '').toLowerCase()
       const month = monthNames[name]
@@ -161,16 +176,11 @@ export const TelegramAdapter = {
       return { start: toDateString(start), end: toDateString(end) }
     }
 
-    // Rango explícito: "del 22 de diciembre al 28 de diciembre" o "2024-12-22 al 2024-12-28"
-    const rangeMatch = lower.match(/del\s+(.+?)\s+al\s+(.+)/i)
-    if (rangeMatch) {
-      const fromText = rangeMatch[1]
-      const toText = rangeMatch[2]
-      const startDate = parseSpanishDate(fromText)
-      const endDate = parseSpanishDate(toText)
-      if (startDate && endDate) {
-        return { start: toDateString(startDate), end: toDateString(endDate) }
-      }
+    if (/\beste\s+a(?:\u00f1|n)o\b/.test(lower) || /\ba(?:\u00f1|n)o\s+actual\b/.test(lower)) {
+      const year = getBogotaTodayUtc().getUTCFullYear()
+      const start = new Date(Date.UTC(year, 0, 1))
+      const end = new Date(Date.UTC(year, 11, 31))
+      return { start: toDateString(start), end: toDateString(end) }
     }
 
     return null
