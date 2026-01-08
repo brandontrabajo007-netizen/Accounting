@@ -1,3 +1,7 @@
+import { aiParseArPayment } from '@application/parsers/aiArPaymentParser'
+import { aiParseApPayment } from '@application/parsers/aiApPaymentParser'
+import { aiParseArQuery } from '@application/parsers/aiArQueryParser'
+import { aiParseApQuery } from '@application/parsers/aiApQueryParser'
 import { aiClassifyEvent } from '@application/parsers/aiEventClassifier'
 import { aiParsePurchase } from '@application/parsers/aiParsePurchase'
 import { aiParsePayroll } from '@application/parsers/aiPayrollParser'
@@ -6,7 +10,18 @@ import { aiParseSale } from '@application/parsers/aiSaleParser'
 import type { UserRepository } from '@application/shared/ports/UserRepository'
 import { TelegramClient } from './telegramClient'
 
-import type { DetectedEvent, ParsedIncomeStatementQuery, ParsedTelegramPayroll, ParsedTelegramPurchase, ParsedTelegramSale, TelegramUpdate } from './telegramTypes'
+import type {
+  DetectedEvent,
+  ParsedIncomeStatementQuery,
+  ParsedTelegramArPayment,
+  ParsedTelegramApPayment,
+  ParsedTelegramArQuery,
+  ParsedTelegramApQuery,
+  ParsedTelegramPayroll,
+  ParsedTelegramPurchase,
+  ParsedTelegramSale,
+  TelegramUpdate,
+} from './telegramTypes'
 
 // Normaliza fecha/periodo cuando el usuario no menciona año: asume el año actual
 const applyCurrentYearIfMissing = (rawText: string, input: { date?: string | null; periodHint?: string | null }) => {
@@ -129,10 +144,7 @@ export const TelegramAdapter = {
     }
 
     // Mes específico: "mes de enero", "el mes de febrero", "en febrero", "enero 2025"
-    const monthMatch =
-      lower.match(/(?:el\s+)?mes\s+de\s+([a-záéíóúñ]+)(?:\s+de\s+(\d{4}))?/) ||
-      lower.match(/\ben\s+([a-záéíóúñ]+)(?:\s+(\d{4}))?\b/) ||
-      lower.match(/\b([a-záéíóúñ]+)\s+(\d{4})?\s*$/)
+    const monthMatch = lower.match(/(?:el\s+)?mes\s+de\s+([a-záéíóúñ]+)(?:\s+de\s+(\d{4}))?/) || lower.match(/\ben\s+([a-záéíóúñ]+)(?:\s+(\d{4}))?\b/) || lower.match(/\b([a-záéíóúñ]+)\s+(\d{4})?\s*$/)
     if (monthMatch) {
       const name = (monthMatch[1] ?? '').toLowerCase()
       const month = monthNames[name]
@@ -189,7 +201,11 @@ export const TelegramAdapter = {
   // ---------------------------------------------------------------------
   // ✅ 1. PARSE SALE
   // ---------------------------------------------------------------------
-  async toSaleInput(update: TelegramUpdate, deps: { userRepository: UserRepository }): Promise<ParsedTelegramSale | null> {
+  async toSaleInput(
+    update: TelegramUpdate,
+    deps: { userRepository: UserRepository },
+    rawText?: string,
+  ): Promise<ParsedTelegramSale | null> {
     const message = update.message
     if (!message) return null
 
@@ -197,7 +213,7 @@ export const TelegramAdapter = {
     const user = await deps.userRepository.findByTelegramId(chatId)
     if (!user) return null
 
-    const text = await this.getMessageText(message)
+    const text = rawText ?? (await this.getMessageText(message))
     if (!text) return null
 
     const sale = await aiParseSale(text)
@@ -212,7 +228,11 @@ export const TelegramAdapter = {
   // ---------------------------------------------------------------------
   // ✅ 2. PARSE PURCHASE
   // ---------------------------------------------------------------------
-  async toPurchaseInput(update: TelegramUpdate, deps: { userRepository: UserRepository }): Promise<ParsedTelegramPurchase | null> {
+  async toPurchaseInput(
+    update: TelegramUpdate,
+    deps: { userRepository: UserRepository },
+    rawText?: string,
+  ): Promise<ParsedTelegramPurchase | null> {
     const message = update.message
     if (!message) return null
 
@@ -220,7 +240,7 @@ export const TelegramAdapter = {
     const user = await deps.userRepository.findByTelegramId(chatId)
     if (!user) return null
 
-    const text = await this.getMessageText(message)
+    const text = rawText ?? (await this.getMessageText(message))
     if (!text) return null
 
     const purchase = await aiParsePurchase(text)
@@ -235,7 +255,11 @@ export const TelegramAdapter = {
   // ---------------------------------------------------------------------
   // ✅ 3. PARSE PAYROLL (SOLO EMPLEADOS)
   // ---------------------------------------------------------------------
-  async toPayrollInput(update: TelegramUpdate, deps: { userRepository: UserRepository }): Promise<ParsedTelegramPayroll | null> {
+  async toPayrollInput(
+    update: TelegramUpdate,
+    deps: { userRepository: UserRepository },
+    rawText?: string,
+  ): Promise<ParsedTelegramPayroll | null> {
     const message = update.message
     if (!message) return null
 
@@ -243,7 +267,7 @@ export const TelegramAdapter = {
     const user = await deps.userRepository.findByTelegramId(chatId)
     if (!user) return null
 
-    const text = await this.getMessageText(message)
+    const text = rawText ?? (await this.getMessageText(message))
     if (!text) return null
 
     const payroll = await aiParsePayroll(text)
@@ -256,9 +280,119 @@ export const TelegramAdapter = {
   },
 
   // ---------------------------------------------------------------------
+  // ƒo. 4. PARSE CUSTOMER PAYMENT
+  // ---------------------------------------------------------------------
+  async toArPaymentInput(
+    update: TelegramUpdate,
+    deps: { userRepository: UserRepository },
+    rawText?: string,
+  ): Promise<ParsedTelegramArPayment | null> {
+    const message = update.message
+    if (!message) return null
+
+    const chatId = message.chat.id
+    const user = await deps.userRepository.findByTelegramId(chatId)
+    if (!user) return null
+
+    const text = rawText ?? (await this.getMessageText(message))
+    if (!text) return null
+
+    const payment = await aiParseArPayment(text)
+    if (!payment) return null
+
+    applyCurrentYearIfMissing(text, payment)
+    payment.companyId = user.companyId
+
+    return { chatId, paymentInput: payment }
+  },
+
+  // ---------------------------------------------------------------------
+  // ’'o. 5. PARSE SUPPLIER PAYMENT
+  // ---------------------------------------------------------------------
+  async toApPaymentInput(
+    update: TelegramUpdate,
+    deps: { userRepository: UserRepository },
+    rawText?: string,
+  ): Promise<ParsedTelegramApPayment | null> {
+    const message = update.message
+    if (!message) return null
+
+    const chatId = message.chat.id
+    const user = await deps.userRepository.findByTelegramId(chatId)
+    if (!user) return null
+
+    const text = rawText ?? (await this.getMessageText(message))
+    if (!text) return null
+
+    const payment = await aiParseApPayment(text)
+    if (!payment) return null
+
+    applyCurrentYearIfMissing(text, payment)
+    payment.companyId = user.companyId
+
+    return { chatId, paymentInput: payment }
+  },
+
+  // ---------------------------------------------------------------------
+  // ƒo. 5. PARSE AR QUERY
+  // ---------------------------------------------------------------------
+  async toArQueryInput(
+    update: TelegramUpdate,
+    deps: { userRepository: UserRepository },
+    rawText?: string,
+  ): Promise<ParsedTelegramArQuery | null> {
+    const message = update.message
+    if (!message) return null
+
+    const chatId = message.chat.id
+    const user = await deps.userRepository.findByTelegramId(chatId)
+    if (!user) return null
+
+    const text = rawText ?? (await this.getMessageText(message))
+    if (!text) return null
+
+    const query = await aiParseArQuery(text)
+    if (!query) return null
+
+    query.companyId = user.companyId
+
+    return { chatId, queryInput: query }
+  },
+
+  // ---------------------------------------------------------------------
+  // ’'o. 6. PARSE AP QUERY
+  // ---------------------------------------------------------------------
+  async toApQueryInput(
+    update: TelegramUpdate,
+    deps: { userRepository: UserRepository },
+    rawText?: string,
+  ): Promise<ParsedTelegramApQuery | null> {
+    const message = update.message
+    if (!message) return null
+
+    const chatId = message.chat.id
+    const user = await deps.userRepository.findByTelegramId(chatId)
+    if (!user) return null
+
+    const text = rawText ?? (await this.getMessageText(message))
+    if (!text) return null
+
+    const query = await aiParseApQuery(text)
+    if (!query) return null
+
+    query.companyId = user.companyId
+
+    return { chatId, queryInput: query }
+  },
+
+  // ---------------------------------------------------------------------
   // ✅ 4. DETECTOR DE EVENTO (sale | purchase | payroll | income | unknown)
   // ---------------------------------------------------------------------
-  async detectAndParse(update: TelegramUpdate, deps: { userRepository: UserRepository }): Promise<DetectedEvent | null> {
+  async detectAndParse(
+    update: TelegramUpdate,
+    deps: { userRepository: UserRepository },
+    rawText?: string,
+  ): Promise<DetectedEvent | null> {
     const message = update.message
     const chatId = message?.chat?.id
     if (!message || !chatId) return null
@@ -273,7 +407,7 @@ export const TelegramAdapter = {
       return null
     }
 
-    const text = await this.getMessageText(message)
+    const text = rawText ?? (await this.getMessageText(message))
 
     if (!text) return null
 
@@ -282,23 +416,50 @@ export const TelegramAdapter = {
 
     // --- SALE ---
     if (classification === 'sale') {
-      const result = await this.toSaleInput(update, deps)
+      const result = await this.toSaleInput(update, deps, text)
       if (!result) return { type: 'sale_error', chatId }
       return { type: 'sale', chatId, data: result.saleInput }
     }
 
     // --- PURCHASE ---
     if (classification === 'purchase') {
-      const result = await this.toPurchaseInput(update, deps)
+      const result = await this.toPurchaseInput(update, deps, text)
       if (!result) return { type: 'purchase_error', chatId }
       return { type: 'purchase', chatId, data: result.purchaseInput }
     }
 
     // --- PAYROLL ---
     if (classification === 'payroll') {
-      const result = await this.toPayrollInput(update, deps)
+      const result = await this.toPayrollInput(update, deps, text)
       if (!result) return { type: 'payroll_error', chatId }
       return { type: 'payroll', chatId, data: result.payrollInput }
+    }
+
+    // --- CUSTOMER PAYMENT ---
+    if (classification === 'customer_payment') {
+      const result = await this.toArPaymentInput(update, deps, text)
+      if (!result) return { type: 'customer_payment_error', chatId }
+      return { type: 'customer_payment', chatId, data: result.paymentInput }
+    }
+
+    if (classification === 'supplier_payment') {
+      const result = await this.toApPaymentInput(update, deps, text)
+      if (!result) return { type: 'supplier_payment_error', chatId }
+      return { type: 'supplier_payment', chatId, data: result.paymentInput }
+    }
+
+    // --- AR QUERY ---
+    if (classification === 'ar_query') {
+      const result = await this.toArQueryInput(update, deps, text)
+      if (!result) return { type: 'ar_query_error', chatId }
+      return { type: 'ar_query', chatId, data: result.queryInput }
+    }
+
+    // --- AP QUERY ---
+    if (classification === 'ap_query') {
+      const result = await this.toApQueryInput(update, deps, text)
+      if (!result) return { type: 'ap_query_error', chatId }
+      return { type: 'ap_query', chatId, data: result.queryInput }
     }
 
     // --- INCOME STATEMENT QUERY ---
@@ -318,3 +479,4 @@ export const TelegramAdapter = {
     return { type: 'unknown', chatId }
   },
 }
+

@@ -19,6 +19,28 @@ export interface MakeRegisterPurchaseDeps {
   processJournalEntry: { process: (id: string) => Promise<JournalEntry> }
   periodAccessGuard: PeriodAccessGuard
   resolvePeriodId: ResolvePeriodId
+  accountsPayable?: {
+    registerPurchaseIfNeeded: (input: {
+      companyId: string
+      supplierName?: string | null
+      amount: number
+      date?: Date
+      journalEntryId?: string
+      description?: string
+      paymentMethod?: string | null
+    }) => Promise<unknown>
+  }
+  supplierHistory?: {
+    registerPurchaseHistory: (input: {
+      companyId: string
+      supplierName: string
+      amount: number
+      date?: Date
+      description?: string
+      paymentMethod?: string | null
+      journalEntryId?: string
+    }) => Promise<unknown>
+  }
 }
 
 export const makeRegisterPurchase = ({
@@ -28,6 +50,8 @@ export const makeRegisterPurchase = ({
   processJournalEntry,
   periodAccessGuard,
   resolvePeriodId,
+  accountsPayable,
+  supplierHistory,
 }: MakeRegisterPurchaseDeps) => {
   const registerPurchase = async (input: PurchaseEventInput) => {
     const date = (() => {
@@ -80,6 +104,38 @@ export const makeRegisterPurchase = ({
 
     await journalEntryRepository.save(journalEntry)
     journalEntry = await processJournalEntry.process(journalEntry.id)
+
+    if (accountsPayable) {
+      try {
+        await accountsPayable.registerPurchaseIfNeeded({
+          companyId,
+          supplierName: input.supplier ?? null,
+          amount: purchaseEvent.amount ?? 0,
+          date,
+          journalEntryId: journalEntry.id,
+          description: purchaseEvent.description,
+          paymentMethod: purchaseEvent.paymentMethod,
+        })
+      } catch (error) {
+        console.error('Error registrando AP (compra):', error)
+      }
+    }
+
+    if (supplierHistory && input.supplier?.trim()) {
+      try {
+        await supplierHistory.registerPurchaseHistory({
+          companyId,
+          supplierName: input.supplier,
+          amount: purchaseEvent.amount ?? 0,
+          date,
+          description: purchaseEvent.description,
+          paymentMethod: purchaseEvent.paymentMethod,
+          journalEntryId: journalEntry.id,
+        })
+      } catch (error) {
+        console.error('Error registrando historial proveedor (compra):', error)
+      }
+    }
 
     return presentJournalEntry(journalEntry, catalog)
   }

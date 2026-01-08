@@ -14,14 +14,34 @@ const VAT_RATE = 0.19
 
 const getAccountName = (catalog: Account[], code: number): string => catalog.find((a) => a.code === code)?.name ?? ''
 
+const normalize = (value: string) =>
+  value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+
+const isCreditSale = (paymentMethod: string | null | undefined) => {
+  if (!paymentMethod) return false
+  const normalized = normalize(paymentMethod)
+  return /(credito|a credito|al credito)/.test(normalized)
+}
+
 export const generateSaleJournalEntry = (event: SaleEvent, accounts: SaleAccountConfig, accountsCatalog: Account[]): JournalEntry => {
   const totalAmount = event.totalAmount > 0 ? event.totalAmount : 0
   const movements: Movement[] = []
 
-  // Entrada (caja / banco)
+  // Entrada (caja / banco) o clientes (AR)
+  const isCredit = isCreditSale(event.paymentMethod)
+  const debitAccount = isCredit ? accounts.accountsReceivableAccount : accounts.cashAccount
+
+  if (!debitAccount) {
+    throw new Error(isCredit ? 'No hay cuenta de clientes configurada para ventas a credito' : 'No hay cuenta de caja configurada para ventas')
+  }
+
   movements.push({
-    accountCode: accounts.cashAccount,
-    accountName: getAccountName(accountsCatalog, accounts.cashAccount),
+    accountCode: debitAccount,
+    accountName: getAccountName(accountsCatalog, debitAccount),
     type: TransactionTypes.DEBIT,
     amount: totalAmount,
     status: totalAmount > 0 ? MovementStatus.CREATED : MovementStatus.PENDING,

@@ -7,6 +7,7 @@ async function seed() {
   await SaleAccountMappingModel.create({
     companyId: 'sahet',
     cashAccount: 1105,
+    accountsReceivableAccount: 1305,
     incomeAccount: 4101,
     vatAccount: 2408,
     cogsAccount: 6135,

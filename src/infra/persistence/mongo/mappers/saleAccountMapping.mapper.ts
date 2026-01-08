@@ -10,4 +10,5 @@ export const mongoToSaleAccountConfig = (doc: SaleAccountMappingDocument): SaleA
   vatAccount: doc.vatAccount ?? undefined,
   cogsAccount: doc.cogsAccount ?? undefined,
   inventoryAccount: doc.inventoryAccount ?? undefined,
+  accountsReceivableAccount: doc.accountsReceivableAccount ?? undefined,
 })

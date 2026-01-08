@@ -9,4 +9,5 @@ export interface SaleEvent extends AccountingEvent<SaleAccountConfig> {
   quantity?: number
   unitCost?: number
   unitPrice?: number
+  paymentMethod?: string | null
 }

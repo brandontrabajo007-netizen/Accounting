@@ -8,6 +8,7 @@ const saleAccountMappingSchema = new Schema({
   vatAccount: { type: Number },
   cogsAccount: { type: Number },
   inventoryAccount: { type: Number },
+  accountsReceivableAccount: { type: Number },
 })
 
 // 2 Genera el tipo AUTOMÁTICAMENTE a partir del schema

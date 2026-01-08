@@ -31,6 +31,7 @@ type PurchaseDetailsResult = {
   amount: number | null
   includesVAT: boolean
   paymentMethod: 'cash' | 'bank' | 'credit' | null
+  supplier: string | null
   date: string | null
   periodHint: string | null
 }
@@ -90,6 +91,7 @@ Responde exactamente:
   "amount": number | null,
   "includesVAT": boolean,
   "paymentMethod": "cash" | "bank" | "credit" | null,
+  "supplier": string | null,
   "date": string | null,
   "periodHint": string | null
 }
@@ -99,14 +101,15 @@ Reglas:
 2) description: frase corta de lo comprado. Si no se puede determinar → null.
 3) includesVAT: "incluye/con iva" → true; "sin/no incluye iva" → false; si no menciona → false (nunca null).
 4) paymentMethod: efectivo/contado → "cash"; banco/transferencia/nequi/daviplata/bancolombia/pse → "bank"; crédito/fiado/por pagar → "credit"; si no se menciona → "cash".
-5) date:
+5) supplier: si menciona proveedor, extraer nombre (ej: "a Textiles Andinos"). Si no, null.
+6) date:
    - Fecha explícita (2025-11-10, 10/11/2025) → "YYYY-MM-DDT00:00:00Z".
    - Día+mes sin año (ej: "12 de noviembre") → usa el AÑO ACTUAL y devuelve "YYYY-MM-DDT00:00:00Z".
    - Solo mes/año (ej: "en noviembre 2025") → date = null y periodHint = "2025-11".
    - Solo mes sin año (ej: "en noviembre") → date = null y periodHint = "YYYY-11" usando el AÑO ACTUAL.
    - Sin fecha → null.
-6) periodHint: "YYYY-MM" cuando solo hay mes/año; si no hay pista → null.
-7) companyId siempre null.
+7) periodHint: "YYYY-MM" cuando solo hay mes/año; si no hay pista → null.
+8) companyId siempre null.
 
 Si el mensaje es nómina/sueldos/empleados/honorarios de colaboradores/prestaciones/liquidaciones → devuelve:
 {
@@ -115,6 +118,7 @@ Si el mensaje es nómina/sueldos/empleados/honorarios de colaboradores/prestacio
   "amount": null,
   "includesVAT": false,
   "paymentMethod": "cash",
+  "supplier": null,
   "date": null,
   "periodHint": null
 }
@@ -139,6 +143,7 @@ Mensaje:
       amount: typeof obj.amount === 'number' ? obj.amount : null,
       includesVAT: Boolean(obj.includesVAT),
       paymentMethod: obj.paymentMethod === 'cash' || obj.paymentMethod === 'bank' || obj.paymentMethod === 'credit' ? obj.paymentMethod : null,
+      supplier: typeof obj.supplier === 'string' ? obj.supplier : null,
       date: typeof obj.date === 'string' ? obj.date : null,
       periodHint: typeof obj.periodHint === 'string' ? obj.periodHint : null,
     }
@@ -160,7 +165,13 @@ export async function aiParsePurchase(message: string): Promise<PurchaseEventInp
   const category = await aiParsePurchaseCategory(message)
 
   const isEmptyDetails =
-    details.description === null && details.amount === null && details.paymentMethod === null && details.includesVAT === false && details.date === null && details.periodHint === null
+    details.description === null &&
+    details.amount === null &&
+    details.paymentMethod === null &&
+    details.includesVAT === false &&
+    details.supplier === null &&
+    details.date === null &&
+    details.periodHint === null
 
   if (isEmptyDetails && category.debitAccount === null) {
     return null
@@ -173,9 +184,12 @@ export async function aiParsePurchase(message: string): Promise<PurchaseEventInp
     includesVAT: details.includesVAT,
     paymentMethod: details.paymentMethod,
     debitAccount: category.debitAccount,
+    supplier: details.supplier,
     date: details.date,
     periodHint: details.periodHint,
   }
 
   return result
 }
+
+

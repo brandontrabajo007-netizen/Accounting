@@ -21,9 +21,40 @@ export interface MakeRegisterSaleDeps {
   processJournalEntry: { process: (id: string) => Promise<JournalEntry> }
   periodAccessGuard: PeriodAccessGuard
   resolvePeriodId: ResolvePeriodId
+  accountsReceivable?: {
+    registerSaleIfNeeded: (input: {
+      companyId: string
+      customerName?: string | null
+      amount: number
+      date?: Date
+      journalEntryId?: string
+      description?: string
+      paymentMethod?: string | null
+    }) => Promise<unknown>
+  }
+  customerHistory?: {
+    registerSaleHistory: (input: {
+      companyId: string
+      customerName: string
+      amount: number
+      date?: Date
+      description?: string
+      paymentMethod?: string | null
+      journalEntryId?: string
+    }) => Promise<unknown>
+  }
 }
 
-export const makeRegisterSale = ({ accountRepository, saleAccountMappingRepository, journalEntryRepository, processJournalEntry, periodAccessGuard, resolvePeriodId }: MakeRegisterSaleDeps) => {
+export const makeRegisterSale = ({
+  accountRepository,
+  saleAccountMappingRepository,
+  journalEntryRepository,
+  processJournalEntry,
+  periodAccessGuard,
+  resolvePeriodId,
+  accountsReceivable,
+  customerHistory,
+}: MakeRegisterSaleDeps) => {
   const registerSale = async (input: SaleEventInput) => {
     const date = (() => {
       if (input.date) {
@@ -82,6 +113,7 @@ export const makeRegisterSale = ({ accountRepository, saleAccountMappingReposito
       quantity,
       unitCost: input.unitCost,
       unitPrice,
+      paymentMethod: input.paymentMethod ?? null,
       toJournalEntry: (config) => generateSaleJournalEntry(saleEvent, config, accountsCatalog),
     }
 
@@ -94,7 +126,41 @@ export const makeRegisterSale = ({ accountRepository, saleAccountMappingReposito
     await journalEntryRepository.save(journalEntry)
     journalEntry = await processJournalEntry.process(journalEntry.id)
 
-    return presentJournalEntry(journalEntry, accountsCatalog)
+    const presented = presentJournalEntry(journalEntry, accountsCatalog)
+
+    if (accountsReceivable) {
+      try {
+        await accountsReceivable.registerSaleIfNeeded({
+          companyId: input.companyId,
+          customerName: input.customerName ?? null,
+          amount: totalAmount,
+          date,
+          journalEntryId: journalEntry.id,
+          description,
+          paymentMethod: input.paymentMethod ?? null,
+        })
+      } catch (error) {
+        console.error('Error registrando AR (venta):', error)
+      }
+    }
+
+    if (customerHistory && input.customerName?.trim()) {
+      try {
+        await customerHistory.registerSaleHistory({
+          companyId: input.companyId,
+          customerName: input.customerName,
+          amount: totalAmount,
+          date,
+          description,
+          paymentMethod: input.paymentMethod ?? null,
+          journalEntryId: journalEntry.id,
+        })
+      } catch (error) {
+        console.error('Error registrando historial cliente (venta):', error)
+      }
+    }
+
+    return presented
   }
 
   return { registerSale }

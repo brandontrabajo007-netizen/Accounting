@@ -24,19 +24,51 @@ export interface TelegramSendMessagePayload {
   chatId: number
   text: string
   parseMode?: 'Markdown' | 'MarkdownV2' | 'HTML'
+  replyMarkup?: TelegramReplyMarkup
+}
+
+export interface TelegramInlineKeyboardButton {
+  text: string
+  callback_data: string
+}
+
+export interface TelegramReplyMarkup {
+  inline_keyboard: TelegramInlineKeyboardButton[][]
 }
 
 export const TelegramClient = {
   // ------------------------------------------------------------
+  // dY"" RESPONDER CALLBACK (botones)
+  // ------------------------------------------------------------
+  async answerCallbackQuery(callbackQueryId: string, text?: string): Promise<void> {
+    const url = `${TELEGRAM_API_BASE}/bot${BOT_TOKEN}/answerCallbackQuery`
+
+    const body = {
+      callback_query_id: callbackQueryId,
+      text,
+    }
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+    if (!res.ok) {
+      console.error('ƒ?O Error respondiendo callback:', await res.text())
+    }
+  },
+  // ------------------------------------------------------------
   // 📨 ENVIAR MENSAJES A TELEGRAM
   // ------------------------------------------------------------
-  async sendMessage({ chatId, text, parseMode }: TelegramSendMessagePayload): Promise<void> {
+  async sendMessage({ chatId, text, parseMode, replyMarkup }: TelegramSendMessagePayload): Promise<void> {
     const url = `${TELEGRAM_API_BASE}/bot${BOT_TOKEN}/sendMessage`
 
     const body = {
       chat_id: chatId,
       text,
       parse_mode: parseMode ?? 'Markdown',
+      reply_markup: replyMarkup,
     }
 
     const res = await fetch(url, {

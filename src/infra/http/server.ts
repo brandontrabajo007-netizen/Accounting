@@ -18,6 +18,8 @@ import { telegramRoutes } from './routes/telegram.routes'
 import { userRoutes } from './routes/user.routes'
 import { accountingPeriodRoutes } from './routes/accountingPeriod.routes'
 import { accountRoutes } from './routes/account.routes'
+import { arRoutes } from './routes/ar.routes'
+import { apRoutes } from './routes/ap.routes'
 
 const app = express()
 
@@ -61,6 +63,8 @@ app.use('/ledger', ledgerRoutes)
 app.use('/', purchaseRoutes)
 app.use('/', payrollRoutes)
 app.use('/', journalEntryRoutes)
+app.use('/', arRoutes)
+app.use('/', apRoutes)
 
 // --------------------
 // Bootstrap app

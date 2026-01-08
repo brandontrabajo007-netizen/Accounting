@@ -1,6 +1,10 @@
 import type { PayrollEventInput } from '@application/eventos/Payroll/data/PayrollEventInput'
 import type { PurchaseEventInput } from '@application/eventos/Purchase/data/PurchaseEventInput'
 import type { SaleEventInput } from '@application/eventos/sales/data/SaleEventInput'
+import type { ArPaymentInput } from '@application/parsers/aiArPaymentParser'
+import type { ApPaymentInput } from '@application/parsers/aiApPaymentParser'
+import type { ArQueryInput } from '@application/parsers/aiArQueryParser'
+import type { ApQueryInput } from '@application/parsers/aiApQueryParser'
 
 // -----------------------------------------------------------------------------
 // TIPOS DE TELEGRAM BÁSICOS
@@ -41,9 +45,17 @@ export interface TelegramMessage {
   audio?: TelegramAudio
 }
 
+export interface TelegramCallbackQuery {
+  id: string
+  from: TelegramUser
+  message?: TelegramMessage
+  data?: string
+}
+
 export interface TelegramUpdate {
   update_id: number
   message?: TelegramMessage
+  callback_query?: TelegramCallbackQuery
 }
 
 // -----------------------------------------------------------------------------
@@ -64,6 +76,26 @@ export interface ParsedTelegramPayroll {
   payrollInput: PayrollEventInput
 }
 
+export interface ParsedTelegramArPayment {
+  chatId: number
+  paymentInput: ArPaymentInput
+}
+
+export interface ParsedTelegramApPayment {
+  chatId: number
+  paymentInput: ApPaymentInput
+}
+
+export interface ParsedTelegramArQuery {
+  chatId: number
+  queryInput: ArQueryInput
+}
+
+export interface ParsedTelegramApQuery {
+  chatId: number
+  queryInput: ApQueryInput
+}
+
 export interface ParsedIncomeStatementQuery {
   chatId: number
   companyId: string
@@ -80,6 +112,14 @@ export type DetectedEvent =
   | { type: 'purchase_error'; chatId: number }
   | { type: 'payroll'; chatId: number; data: PayrollEventInput }
   | { type: 'payroll_error'; chatId: number }
+  | { type: 'customer_payment'; chatId: number; data: ArPaymentInput }
+  | { type: 'customer_payment_error'; chatId: number }
+  | { type: 'supplier_payment'; chatId: number; data: ApPaymentInput }
+  | { type: 'supplier_payment_error'; chatId: number }
+  | { type: 'ar_query'; chatId: number; data: ArQueryInput }
+  | { type: 'ar_query_error'; chatId: number }
+  | { type: 'ap_query'; chatId: number; data: ApQueryInput }
+  | { type: 'ap_query_error'; chatId: number }
   | { type: 'income_statement_query'; chatId: number; companyId: string; period: { start: string; end: string } }
   | { type: 'income_statement_error'; chatId: number }
   | { type: 'unknown'; chatId: number }

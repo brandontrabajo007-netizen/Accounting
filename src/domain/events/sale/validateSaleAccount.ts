@@ -5,7 +5,20 @@ import type { SaleAccountConfig } from './SaleAccountConfig'
 import type { SaleEvent } from './SaleEvent'
 
 export const validateSaleAccount = (mapping: SaleAccountConfig, accountsCatalog: Account[], event?: SaleEvent): void => {
-  validateAccount('cashAccount', mapping.cashAccount, accountsCatalog, AccountType.ASSET)
+  const paymentMethod = event?.paymentMethod
+    ? event.paymentMethod
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+    : ''
+  const isCredit = paymentMethod ? /(credito|a credito|al credito)/.test(paymentMethod) : false
+
+  if (isCredit) {
+    validateAccount('accountsReceivableAccount', mapping.accountsReceivableAccount, accountsCatalog, AccountType.ASSET)
+  } else {
+    validateAccount('cashAccount', mapping.cashAccount, accountsCatalog, AccountType.ASSET)
+  }
+
   validateAccount('incomeAccount', mapping.incomeAccount, accountsCatalog, AccountType.INCOME)
   validateAccount('vatAccount', mapping.vatAccount, accountsCatalog, AccountType.LIABILITY)
 

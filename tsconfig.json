@@ -21,6 +21,9 @@
     "paths": {
       "@domain/*": ["domain/*"],
       "@application/*": ["application/*"],
+      "@accounts-receivable/*": ["accounts-receivable/*"],
+      "@accounts-payable/*": ["accounts-payable/*"],
+      "@supplier-history/*": ["supplier-history/*"],
       "@infra/*": ["infra/*"],
       "@config/*": ["config/*"],
       "@bootstrap/*": ["bootstrap/*"]

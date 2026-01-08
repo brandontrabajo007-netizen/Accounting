@@ -43,7 +43,9 @@ FORMATO EXACTO:
   "includesCost": boolean,
   "quantity": number | null,
   "unitCost": number | null,
-  "unitPrice": number | null
+  "unitPrice": number | null,
+  "customerName": string | null,
+  "paymentMethod": string | null
 }
 
 REGLAS:
@@ -70,6 +72,12 @@ REGLAS:
    - Si el valor es unitario o no menciona que sea total ("me cuesta 36.000", "cuesta 36k", "cada uno 36.000", "c/u 36.000") -> unitCost = valor (NO dividir).
    - Si hay costo pero sigue ambiguo -> asume unitario y NO dividir.
    - Si no hay info clara -> null.
+13) customerName:
+   - Si hay "a {persona}" o "para {persona}" -> customerName = ese nombre.
+   - Si no hay nombre claro -> null.
+14) paymentMethod:
+   - "efectivo", "transferencia", "banco", "tarjeta", "credito", "a credito", "al credito".
+   - Si no se menciona -> null.
 
 Mensaje:
 "${message}"
@@ -91,4 +99,3 @@ Mensaje:
     return null
   }
 }
-
