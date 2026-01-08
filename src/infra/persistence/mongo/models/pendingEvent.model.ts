@@ -1,4 +1,5 @@
 import mongoose, { type Document, type Model, Schema } from 'mongoose'
+import type { PendingEventStatus } from '@application/pending-events/PendingEvent'
 
 interface PendingEventDocument extends Document {
   companyId: string
@@ -6,7 +7,7 @@ interface PendingEventDocument extends Document {
   eventType: string
   interpretedData: Record<string, unknown>
   metadata?: Record<string, unknown> | null
-  status: string
+  status: PendingEventStatus
   expiresAt?: Date | null
   createdAt: Date
   updatedAt: Date
@@ -19,7 +20,7 @@ const PendingEventSchema = new Schema<PendingEventDocument>(
     eventType: { type: String, required: true },
     interpretedData: { type: Schema.Types.Mixed, required: true },
     metadata: { type: Schema.Types.Mixed, default: null },
-    status: { type: String, required: true, index: true },
+    status: { type: String, required: true, index: true, enum: ['PENDING_CONFIRMATION', 'CONFIRMED', 'CANCELLED', 'EXPIRED'] },
     expiresAt: { type: Date, default: null, index: true },
   },
   { timestamps: true },
