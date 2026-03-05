@@ -230,12 +230,43 @@ const formatCurrency = (value: number) =>
     maximumFractionDigits: 0,
   })
 
-const getSignatureFrontendBaseUrl = () =>
-  (
-    process.env.SIGNATURE_FRONTEND_URL ??
-    process.env.FRONTEND_URL ??
+const normalizeBaseUrl = (value: string | undefined | null): string | null => {
+  if (!value) return null
+  const trimmed = value.trim().replace(/\/+$/, '')
+  if (!trimmed) return null
+  try {
+    const parsed = new URL(trimmed)
+    if (!/^https?:$/i.test(parsed.protocol)) return null
+    return parsed.toString().replace(/\/+$/, '')
+  } catch {
+    return null
+  }
+}
+
+const getFirstCorsOrigin = (): string | null => {
+  const origins = (process.env.CORS_ORIGINS ?? '')
+    .split(',')
+    .map((origin) => normalizeBaseUrl(origin))
+    .filter((origin): origin is string => Boolean(origin))
+  return origins[0] ?? null
+}
+
+const getSignatureFrontendBaseUrl = () => {
+  const configured =
+    normalizeBaseUrl(process.env.SIGNATURE_FRONTEND_URL) ??
+    normalizeBaseUrl(process.env.FRONTEND_URL) ??
+    getFirstCorsOrigin() ??
+    normalizeBaseUrl(process.env.APP_URL) ??
     'http://localhost:5173'
-  ).replace(/\/+$/, '')
+
+  if (process.env.NODE_ENV === 'production' && /^http:\/\/localhost(?::\d+)?$/i.test(configured)) {
+    console.warn(
+      '[telegram] Signature link is using localhost in production. Set SIGNATURE_FRONTEND_URL to your public frontend URL.',
+    )
+  }
+
+  return configured
+}
 
 const createSignatureToken = () => randomBytes(24).toString('hex')
 
