@@ -27,9 +27,20 @@ export interface TelegramSendMessagePayload {
   replyMarkup?: TelegramReplyMarkup
 }
 
+export interface TelegramSendDocumentPayload {
+  chatId: number
+  file: Buffer
+  filename: string
+  caption?: string
+}
+
 export interface TelegramInlineKeyboardButton {
   text: string
-  callback_data: string
+  callback_data?: string
+  url?: string
+  copy_text?: {
+    text: string
+  }
 }
 
 export interface TelegramReplyMarkup {
@@ -79,6 +90,31 @@ export const TelegramClient = {
 
     if (!res.ok) {
       console.error('❌ Error enviando mensaje:', await res.text())
+    }
+  },
+
+  // ------------------------------------------------------------
+  // 📄 ENVIAR DOCUMENTO (PDF)
+  // ------------------------------------------------------------
+  async sendDocument({ chatId, file, filename, caption }: TelegramSendDocumentPayload): Promise<void> {
+    const url = `${TELEGRAM_API_BASE}/bot${BOT_TOKEN}/sendDocument`
+
+    const formData = new FormData()
+    formData.append('chat_id', String(chatId))
+    const fileBytes = Uint8Array.from(file)
+    formData.append('document', new Blob([fileBytes], { type: 'application/pdf' }), filename)
+    if (caption) {
+      formData.append('caption', caption)
+      formData.append('parse_mode', 'Markdown')
+    }
+
+    const res = await fetch(url, {
+      method: 'POST',
+      body: formData,
+    })
+
+    if (!res.ok) {
+      console.error('âŒ Error enviando documento:', await res.text())
     }
   },
 

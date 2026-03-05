@@ -4,6 +4,9 @@ interface ArCustomerDocument extends Document {
   companyId: string
   name: string
   normalizedName: string
+  phone?: string
+  city?: string
+  address?: string
   createdAt: Date
   updatedAt: Date
 }
@@ -13,6 +16,9 @@ const ArCustomerSchema = new Schema<ArCustomerDocument>(
     companyId: { type: String, required: true, index: true },
     name: { type: String, required: true },
     normalizedName: { type: String, required: true },
+    phone: { type: String },
+    city: { type: String },
+    address: { type: String },
   },
   { timestamps: true },
 )

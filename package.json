@@ -55,6 +55,7 @@
     "mongoose-paginate-v2": "^1.9.1",
     "node-fetch": "^3.3.2",
     "pdfkit": "^0.17.2",
-    "tsconfig-paths": "^4.2.0"
+    "tsconfig-paths": "^4.2.0",
+    "zod": "^4.0.0"
   }
 }

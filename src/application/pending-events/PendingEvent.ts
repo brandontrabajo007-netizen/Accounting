@@ -1,6 +1,14 @@
 export type PendingEventStatus = 'PENDING_CONFIRMATION' | 'CONFIRMED' | 'CANCELLED' | 'EXPIRED'
 
-export type PendingEventType = 'sale' | 'purchase' | 'payroll' | 'customer_payment' | 'supplier_payment'
+export type PendingEventType =
+  | 'sale'
+  | 'sale_guided'
+  | 'invoice_signature'
+  | 'purchase'
+  | 'payroll'
+  | 'customer_payment'
+  | 'supplier_payment'
+  | 'customer_guided'
 
 export type PendingEvent = {
   id: string

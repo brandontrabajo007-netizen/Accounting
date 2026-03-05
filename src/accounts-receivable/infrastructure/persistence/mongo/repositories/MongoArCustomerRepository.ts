@@ -7,6 +7,9 @@ interface ArCustomerDocument {
   companyId: string
   name: string
   normalizedName: string
+  phone?: string | null
+  city?: string | null
+  address?: string | null
   createdAt: Date
 }
 
@@ -15,6 +18,9 @@ const toDomain = (doc: ArCustomerDocument): Customer => ({
   companyId: doc.companyId,
   name: doc.name,
   normalizedName: doc.normalizedName,
+  phone: doc.phone ?? null,
+  city: doc.city ?? null,
+  address: doc.address ?? null,
   createdAt: doc.createdAt,
 })
 
@@ -57,11 +63,21 @@ export class MongoArCustomerRepository implements CustomerRepository {
     return { items: docs.map(toDomain), total }
   }
 
-  async create(data: { companyId: string; name: string; normalizedName: string }): Promise<Customer> {
+  async create(data: {
+    companyId: string
+    name: string
+    normalizedName: string
+    phone?: string | null
+    city?: string | null
+    address?: string | null
+  }): Promise<Customer> {
     const doc = await ArCustomerMongoModel.create({
       companyId: data.companyId,
       name: data.name,
       normalizedName: data.normalizedName,
+      phone: data.phone?.trim() || undefined,
+      city: data.city?.trim() || undefined,
+      address: data.address?.trim() || undefined,
     })
     return toDomain(doc)
   }

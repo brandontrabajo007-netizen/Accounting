@@ -25,6 +25,8 @@
       "@accounts-payable/*": ["accounts-payable/*"],
       "@supplier-history/*": ["supplier-history/*"],
       "@infra/*": ["infra/*"],
+      "@inventory/*": ["inventory/*"],
+      "@contracts/*": ["contracts/*"],
       "@config/*": ["config/*"],
       "@bootstrap/*": ["bootstrap/*"]
     }

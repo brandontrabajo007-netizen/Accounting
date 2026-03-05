@@ -8,5 +8,12 @@ export interface CustomerRepository {
     companyId: string,
     params?: { search?: string; page?: number; limit?: number },
   ): Promise<{ items: Customer[]; total: number }>
-  create(data: { companyId: string; name: string; normalizedName: string }): Promise<Customer>
+  create(data: {
+    companyId: string
+    name: string
+    normalizedName: string
+    phone?: string | null
+    city?: string | null
+    address?: string | null
+  }): Promise<Customer>
 }

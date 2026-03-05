@@ -10,9 +10,7 @@ const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
 
 export async function aiClassifyEvent(
   message: string,
-): Promise<
-  'sale' | 'purchase' | 'payroll' | 'income_statement_query' | 'customer_payment' | 'supplier_payment' | 'ar_query' | 'ap_query' | 'unknown'
-> {
+): Promise<'sale' | 'purchase' | 'payroll' | 'income_statement_query' | 'customer_payment' | 'supplier_payment' | 'ar_query' | 'ap_query' | 'unknown'> {
   const prompt = `
 Clasifica el siguiente mensaje en una sola categoria:
 
@@ -22,7 +20,7 @@ Clasifica el siguiente mensaje en una sola categoria:
 - "income_statement_query": consulta de utilidad/ganancia/perdida para un periodo.
 - "customer_payment": pago recibido de un cliente.
 - "supplier_payment": pago realizado a un proveedor (abono a proveedor, pague a proveedor, pague factura de X).
-- "ar_query": consulta de cuentas por cobrar (quien me debe, cuanto me debe X, extracto de X).
+- "ar_query": consulta de cuentas por cobrar (quien me debe, cuanto me debe X, extracto de X, ejemplo "pasame el extracto de X" o "pasame el historico de X" o "pasame el libro de X").
 - "ap_query": consulta de cuentas por pagar (a quien le debo, cuanto le debo a X, extracto de X).
 - "unknown": no encaja en ninguna categoria.
 

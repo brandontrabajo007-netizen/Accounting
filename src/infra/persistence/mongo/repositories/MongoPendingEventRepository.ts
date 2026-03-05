@@ -47,6 +47,39 @@ export class MongoPendingEventRepository implements PendingEventRepository {
     return doc ? toDomain(doc as PendingEventDocument) : null
   }
 
+  async findLatestPendingByTelegramUserId(
+    telegramUserId: number,
+    eventType?: PendingEvent['eventType'],
+  ): Promise<PendingEvent | null> {
+    const query: Record<string, unknown> = {
+      telegramUserId,
+      status: 'PENDING_CONFIRMATION',
+    }
+
+    if (eventType) {
+      query.eventType = eventType
+    }
+
+    const doc = await PendingEventMongoModel.findOne(query).sort({ createdAt: -1 }).lean()
+    return doc ? toDomain(doc as PendingEventDocument) : null
+  }
+
+  async updateData(
+    id: string,
+    interpretedData: Record<string, unknown>,
+    metadata?: Record<string, unknown> | null,
+  ): Promise<PendingEvent | null> {
+    const doc = await PendingEventMongoModel.findByIdAndUpdate(
+      id,
+      {
+        interpretedData,
+        metadata: metadata ?? null,
+      },
+      { new: true },
+    ).lean()
+    return doc ? toDomain(doc as PendingEventDocument) : null
+  }
+
   async updateStatus(id: string, status: PendingEventStatus): Promise<PendingEvent | null> {
     const doc = await PendingEventMongoModel.findByIdAndUpdate(id, { status }, { new: true }).lean()
     return doc ? toDomain(doc as PendingEventDocument) : null

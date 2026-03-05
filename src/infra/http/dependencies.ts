@@ -39,6 +39,14 @@ import { MongoCustomerHistoryRepository } from '@accounts-receivable/infrastruct
 import { MongoApEntryRepository } from '@accounts-payable/infrastructure/persistence/mongo/repositories/MongoApEntryRepository'
 import { MongoApSettingsRepository } from '@accounts-payable/infrastructure/persistence/mongo/repositories/MongoApSettingsRepository'
 import { MongoApSupplierRepository } from '@accounts-payable/infrastructure/persistence/mongo/repositories/MongoApSupplierRepository'
+import { ProductId } from '@inventory/domain/value-objects/ProductId'
+import {
+  confirmSale as inventoryConfirmSale,
+  idGenerator as inventoryIdGenerator,
+  productRepo as inventoryProductRepo,
+  reverseSale as inventoryReverseSale,
+  variantRepo as inventoryVariantRepo,
+} from '@inventory/infrastructure/http/dependencies'
 
 // Supplier history
 import { MongoSupplierHistoryRepository } from '@supplier-history/infrastructure/persistence/mongo/repositories/MongoSupplierHistoryRepository'
@@ -121,3 +129,12 @@ export const domainEventBus = makeInMemoryDomainEventBus([closingEntryHandler, l
 
 // Use cases
 export const processJournalEntry = makeProcessJournalEntry(journalEntryRepository, ledgerPoster, periodAccessGuard)
+
+export const inventoryGateway = {
+  idGenerator: inventoryIdGenerator,
+  listProducts: (input: Parameters<typeof inventoryProductRepo.list>[0]) => inventoryProductRepo.list(input),
+  listVariantsByProductId: (companyId: string, productId: string) =>
+    inventoryVariantRepo.listByProductId(companyId, ProductId.from(productId)),
+  confirmSale: inventoryConfirmSale,
+  reverseSale: inventoryReverseSale,
+}

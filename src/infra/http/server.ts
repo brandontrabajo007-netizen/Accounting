@@ -20,14 +20,21 @@ import { accountingPeriodRoutes } from './routes/accountingPeriod.routes'
 import { accountRoutes } from './routes/account.routes'
 import { arRoutes } from './routes/ar.routes'
 import { apRoutes } from './routes/ap.routes'
+import { inventoryRoutes } from '@inventory/infrastructure/http/routes/inventoryRoutes'
+import { ensureInventoryIndexes } from '@inventory/infrastructure/db/mongo/indexes/ensureIndexes'
 
 const app = express()
 
 app.use(express.json())
-const allowedOrigins = (process.env.CORS_ORIGINS ?? '')
-  .split(',')
-  .map((o) => o.trim())
-  .filter(Boolean)
+const allowedOrigins = new Set(
+  [
+    ...(process.env.CORS_ORIGINS ?? '')
+      .split(',')
+      .map((o) => o.trim()),
+    process.env.FRONTEND_URL ?? '',
+    process.env.SIGNATURE_FRONTEND_URL ?? '',
+  ].filter(Boolean),
+)
 
 app.use(
   cors({
@@ -35,7 +42,7 @@ app.use(
       // Requests sin origin (Postman, Telegram, server-to-server)
       if (!origin) return callback(null, true)
 
-      if (allowedOrigins.includes(origin)) {
+      if (allowedOrigins.has(origin)) {
         return callback(null, true)
       }
 
@@ -43,7 +50,7 @@ app.use(
     },
     credentials: true,
     allowedHeaders: ['Content-Type', 'Authorization'],
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   }),
 )
 app.use(cookieParser())
@@ -65,6 +72,7 @@ app.use('/', payrollRoutes)
 app.use('/', journalEntryRoutes)
 app.use('/', arRoutes)
 app.use('/', apRoutes)
+app.use('/api/inventory', inventoryRoutes)
 
 // --------------------
 // Bootstrap app
@@ -72,6 +80,7 @@ app.use('/', apRoutes)
 ;(async () => {
   try {
     await connectToMongo()
+    await ensureInventoryIndexes()
 
     const PORT = Number(process.env.PORT ?? 3000)
 
