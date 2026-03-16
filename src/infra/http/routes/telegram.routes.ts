@@ -196,7 +196,7 @@ Con mis superpoderes puedo:
 
 🧾 *Crear cliente:*
 "Guíame para crear cliente"
-"Crear cliente: Juan Pérez, teléfono: 3001234567, ciudad: Cali, dirección: Cra 10 # 20-30"
+"Crear cliente: Juan Pérez, cédula: 123456789, teléfono: 3001234567, ciudad: Cali, dirección: Cra 10 # 20-30"
 "Consultar cliente: Juan Pérez"
 
 ¡Cuéntame qué vendiste, compraste o pagaste! 🚀
@@ -389,6 +389,12 @@ const normalizePhoneInput = (value: string): string => {
   return cleaned
 }
 
+const normalizeCustomerDocumentInput = (value: string): string => {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  return trimmed.replace(/\s+/g, '').replace(/[^\da-zA-Z-]/g, '')
+}
+
 const normalizeOptionalField = (value: string): string | null => {
   const cleaned = value.trim()
   if (!cleaned) return null
@@ -459,12 +465,13 @@ type GuidedSaleMetadata = {
 
 type GuidedCustomerData = {
   name?: string | null
+  documentNumber?: string | null
   phone?: string | null
   city?: string | null
   address?: string | null
 }
 
-type GuidedCustomerStep = 'name' | 'phone' | 'city' | 'address' | 'confirm'
+type GuidedCustomerStep = 'name' | 'documentNumber' | 'phone' | 'city' | 'address' | 'confirm'
 
 type GuidedCustomerMetadata = {
   step: GuidedCustomerStep
@@ -476,6 +483,7 @@ type InvoiceSignatureData = {
   companyId?: string | null
   companyName?: string | null
   customerName?: string | null
+  customerDocumentNumber?: string | null
   customerPhone?: string | null
   customerCity?: string | null
   customerAddress?: string | null
@@ -509,19 +517,28 @@ const isGuidedCustomerCommand = (value: string) => {
   return /\b(gu[ií]ame para crear cliente|guiame para crear cliente|crear cliente guiado|crear cliente|nuevo cliente|registrar cliente)\b/.test(text)
 }
 
-const parseCustomerCreateMessage = (rawText: string): { name?: string | null; phone?: string | null; city?: string | null; address?: string | null } | null => {
+const parseCustomerCreateMessage = (
+  rawText: string,
+): { name?: string | null; documentNumber?: string | null; phone?: string | null; city?: string | null; address?: string | null } | null => {
   const text = rawText.trim()
   if (!text) return null
 
   const normalized = normalizeText(text)
   const hasCreateKeyword = /\b(crear|nuevo|registrar|agregar)\s+cliente\b/.test(normalized) || /\bcliente\s+nuevo\b/.test(normalized)
-  const hasLabels = /(cliente|nombre)\s*[:-]/i.test(text) || /(telefono|tel|celular|cel|whatsapp|phone)\s*[:-]/i.test(text)
+  const hasLabels =
+    /(cliente|nombre)\s*[:-]/i.test(text) ||
+    /(cedula|c[eé]dula|documento|doc|dni|nit)\s*[:-]/i.test(text) ||
+    /(telefono|tel|celular|cel|whatsapp|phone)\s*[:-]/i.test(text)
 
   if (!hasCreateKeyword && !hasLabels) return null
 
+  const documentLabelMatch = text.match(/(?:cedula|c[eé]dula|documento|doc|dni|nit)\s*[:-]\s*([^\n,;]+)/i)
+  const documentRaw = documentLabelMatch?.[1]?.trim() ?? null
+  const documentNumber = documentRaw ? normalizeCustomerDocumentInput(documentRaw) : undefined
+
   const phoneLabelMatch = text.match(/(?:telefono|tel|celular|cel|whatsapp|phone)\s*[:-]\s*([+()\d\s-]{7,})/i)
   const phoneRaw = phoneLabelMatch?.[1] ?? null
-  const phoneFallbackMatch = !phoneRaw ? text.match(/(\+?\d[\d\s-]{6,})/) : null
+  const phoneFallbackMatch = !phoneRaw && !documentRaw ? text.match(/(\+?\d[\d\s-]{6,})/) : null
   let phone = phoneRaw ? normalizePhoneInput(phoneRaw) : phoneFallbackMatch ? normalizePhoneInput(phoneFallbackMatch[1]) : null
 
   if (phone && phone.replace(/\D/g, '').length < 7) {
@@ -541,8 +558,10 @@ const parseCustomerCreateMessage = (rawText: string): { name?: string | null; ph
     let candidate = text
     candidate = candidate.replace(/(?:crear|nuevo|registrar|agregar)\s+cliente/gi, '')
     candidate = candidate.replace(/cliente\s+nuevo/gi, '')
+    if (documentRaw) candidate = candidate.replace(documentRaw, '')
     if (phoneRaw) candidate = candidate.replace(phoneRaw, '')
     if (phoneFallbackMatch) candidate = candidate.replace(phoneFallbackMatch[1], '')
+    candidate = candidate.replace(/(?:cedula|c[eé]dula|documento|doc|dni|nit)\s*[:-]?/gi, '')
     candidate = candidate.replace(/(?:telefono|tel|celular|cel|whatsapp|phone)\s*[:-]?/gi, '')
     if (city) candidate = candidate.replace(city, '')
     if (address) candidate = candidate.replace(address, '')
@@ -553,8 +572,14 @@ const parseCustomerCreateMessage = (rawText: string): { name?: string | null; ph
     if (candidate) name = candidate
   }
 
-  if (!name && !phone && !city && !address) return null
-  return { name, phone, city: city ? normalizeOptionalField(city) : null, address: address ? normalizeOptionalField(address) : null }
+  if (!name && !documentNumber && !phone && !city && !address) return null
+  return {
+    name,
+    documentNumber: documentNumber || null,
+    phone,
+    city: cityLabelMatch ? normalizeOptionalField(city ?? '') : undefined,
+    address: addressLabelMatch ? normalizeOptionalField(address ?? '') : undefined,
+  }
 }
 
 const isCustomerLookupCommand = (value: string) => {
@@ -1051,6 +1076,7 @@ const completeSignedInvoiceForPending = async (pending: PendingEvent, meta: Invo
     companyId: invoice.companyId ?? pending.companyId,
     companyName: invoice.companyName ?? null,
     customerName: invoice.customerName ?? null,
+    customerDocumentNumber: invoice.customerDocumentNumber ?? null,
     customerPhone: invoice.customerPhone ?? null,
     customerCity: invoice.customerCity ?? null,
     customerAddress: invoice.customerAddress ?? null,
@@ -1314,35 +1340,60 @@ const buildGuidedSaleSummary = (data: GuidedSaleData, totalAmount: number) => {
   const downPaymentAmount = Math.max(0, Math.round(Number(data.downPaymentAmount ?? 0)))
   const pendingAmount = Math.max(0, totalAmount - downPaymentAmount)
   const isCreditSale = /credito|cr[eé]dito/.test(normalizeText(data.paymentMethod ?? ''))
-  const lines: string[] = ['Confirma la venta', '']
+  const lines: string[] = ['🧾 *Resumen de la venta*', '']
   lines.push(`Cliente: ${formatOptionalText(data.customerName ?? null)}`)
   lines.push(`Fecha: ${formatOptionalDate(data.date ?? null)}`)
-  lines.push(`Pago: ${formatOptionalText(data.paymentMethod ?? null)}`)
+  lines.push(`Forma de pago: ${formatOptionalText(data.paymentMethod ?? null)}`)
   if (data.creditDueDate) {
-    lines.push(`Fecha de pago: ${data.creditDueDate}`)
+    lines.push(`Fecha límite de pago: ${formatOptionalDate(data.creditDueDate)}`)
   }
-  lines.push(`Cantidad total: ${totalQty}`)
-  lines.push(`Total: ${formatCurrency(totalAmount)}`)
+  lines.push(`Unidades totales: ${totalQty}`)
+  lines.push(`Total de la venta: ${formatCurrency(totalAmount)}`)
   if (isCreditSale) {
     lines.push(`Abono inicial: ${formatCurrency(downPaymentAmount)}`)
     lines.push(`Saldo pendiente: ${formatCurrency(pendingAmount)}`)
   }
   lines.push('')
-  lines.push('Detalle:')
-  lines.push(
-    data.items
-      .map((item) => {
-        const variants = item.variants
-          .map((variant) => {
-            const priceLabel = variant.unitPrice ? ` @${formatCurrency(variant.unitPrice)}` : ''
-            return `${variant.attribute} ${variant.value} x${variant.qty}${priceLabel}`
-          })
-          .join(', ')
-        return `- ${item.productName}: ${variants}`
-      })
-      .join('\n'),
-  )
-  lines.push('', 'Responde *confirmar* para registrar la venta o *cancelar* para salir.')
+  lines.push('*Detalle por producto:*')
+
+  if (data.items.length === 0) {
+    lines.push('- Sin productos')
+  } else {
+    data.items.forEach((item, index) => {
+      lines.push(`${index + 1}. ${item.productName}`)
+      let productSubtotal = 0
+
+      if (item.variants.length === 0) {
+        lines.push('   - Sin variantes')
+      } else {
+        item.variants.forEach((variant) => {
+          const variantLabel = `${variant.attribute} ${variant.value}`.trim()
+          const unitPrice = variant.unitPrice && variant.unitPrice > 0 ? Math.round(variant.unitPrice) : 0
+          const lineTotal = unitPrice > 0 ? unitPrice * variant.qty : 0
+          productSubtotal += lineTotal
+
+          if (unitPrice > 0) {
+            lines.push(`   - ${variantLabel}: ${variant.qty} x ${formatCurrency(unitPrice)} = ${formatCurrency(lineTotal)}`)
+            return
+          }
+
+          lines.push(`   - ${variantLabel}: ${variant.qty}`)
+        })
+      }
+
+      if (productSubtotal > 0) {
+        lines.push(`   Subtotal: ${formatCurrency(productSubtotal)}`)
+      }
+
+      lines.push('')
+    })
+
+    if (lines[lines.length - 1] === '') lines.pop()
+  }
+
+  lines.push('')
+  lines.push('Si todo está correcto, responde *confirmar*.')
+  lines.push('Si deseas salir sin guardar, responde *cancelar*.')
   return lines.join('\n')
 }
 
@@ -1559,12 +1610,22 @@ const getGuidedCustomerState = (pending: PendingEvent): { data: GuidedCustomerDa
   const rawMeta = pending.metadata ?? {}
 
   const name = typeof rawData.name === 'string' ? rawData.name : rawData.name === null ? null : undefined
+  const documentNumber =
+    typeof rawData.documentNumber === 'string'
+      ? rawData.documentNumber
+      : rawData.documentNumber === null
+        ? null
+        : typeof rawData.cedula === 'string'
+          ? rawData.cedula
+          : rawData.cedula === null
+            ? null
+            : undefined
   const phone = typeof rawData.phone === 'string' ? rawData.phone : rawData.phone === null ? null : undefined
   const city = typeof rawData.city === 'string' ? rawData.city : rawData.city === null ? null : undefined
   const address = typeof rawData.address === 'string' ? rawData.address : rawData.address === null ? null : undefined
 
   return {
-    data: { name, phone, city, address },
+    data: { name, documentNumber, phone, city, address },
     meta: { step: (rawMeta.step as GuidedCustomerStep) ?? 'name' },
   }
 }
@@ -1579,10 +1640,24 @@ const isValidCustomerPhone = (value: string | null | undefined) => {
   return digits.length >= 7
 }
 
+const isValidCustomerDocument = (value: string | null | undefined) => {
+  if (!value) return false
+  const normalized = normalizeCustomerDocumentInput(value)
+  const alphanumericLength = normalized.replace(/[^a-zA-Z0-9]/g, '').length
+  return alphanumericLength >= 5
+}
+
 const askGuidedCustomerName = async (chatId: number) => {
   await TelegramClient.sendMessage({
     chatId,
     text: '¿Cuál es el nombre del cliente?',
+  })
+}
+
+const askGuidedCustomerDocument = async (chatId: number) => {
+  await TelegramClient.sendMessage({
+    chatId,
+    text: '¿Cuál es la cédula/documento del cliente? (obligatorio)',
   })
 }
 
@@ -1610,6 +1685,7 @@ const buildGuidedCustomerSummary = (data: GuidedCustomerData) =>
   [
     'Resumen del cliente:',
     `Nombre: ${formatOptionalText(data.name ?? null)}`,
+    `Cédula: ${formatOptionalText(data.documentNumber ?? null)}`,
     `Teléfono: ${formatOptionalText(data.phone ?? null)}`,
     `Ciudad: ${formatOptionalText(data.city ?? null)}`,
     `Dirección: ${formatOptionalText(data.address ?? null)}`,
@@ -1621,6 +1697,15 @@ const createCustomerFromInput = async (chatId: number, companyId: string, data: 
   const name = data.name?.trim()
   if (!name) {
     await TelegramClient.sendMessage({ chatId, text: 'Debes indicar el nombre del cliente.' })
+    return false
+  }
+
+  const documentNumber = data.documentNumber?.trim() ?? null
+  if (!isValidCustomerDocument(documentNumber)) {
+    await TelegramClient.sendMessage({
+      chatId,
+      text: 'Debes indicar una cédula/documento válido (mínimo 5 caracteres).',
+    })
     return false
   }
 
@@ -1636,9 +1721,24 @@ const createCustomerFromInput = async (chatId: number, companyId: string, data: 
   const normalizedName = normalizeCustomerName(name)
   const existing = await arCustomerRepository.findByNormalizedName(companyId, normalizedName)
   if (existing) {
+    const updated = await arCustomerRepository.updateById(existing.id, {
+      name,
+      normalizedName,
+      documentNumber,
+      phone,
+      city: data.city,
+      address: data.address,
+    })
+    if (!updated) {
+      await TelegramClient.sendMessage({
+        chatId,
+        text: 'No pude actualizar el cliente existente.',
+      })
+      return false
+    }
     await TelegramClient.sendMessage({
       chatId,
-      text: `El cliente "${existing.name}" ya existe.`,
+      text: `✅ Cliente actualizado: ${updated.name}\nCédula: ${updated.documentNumber ?? 'sin dato'}\nTeléfono: ${updated.phone ?? 'sin dato'}\nCiudad: ${updated.city ?? 'sin dato'}\nDirección: ${updated.address ?? 'sin dato'}`,
     })
     return true
   }
@@ -1647,6 +1747,7 @@ const createCustomerFromInput = async (chatId: number, companyId: string, data: 
     companyId,
     name,
     normalizedName,
+    documentNumber,
     phone,
     city: data.city ?? null,
     address: data.address ?? null,
@@ -1654,7 +1755,7 @@ const createCustomerFromInput = async (chatId: number, companyId: string, data: 
 
   await TelegramClient.sendMessage({
     chatId,
-    text: `✅ Cliente creado: ${customer.name}\nTeléfono: ${customer.phone ?? 'sin dato'}\nCiudad: ${customer.city ?? 'sin dato'}\nDirección: ${customer.address ?? 'sin dato'}`,
+    text: `✅ Cliente creado: ${customer.name}\nCédula: ${customer.documentNumber ?? 'sin dato'}\nTeléfono: ${customer.phone ?? 'sin dato'}\nCiudad: ${customer.city ?? 'sin dato'}\nDirección: ${customer.address ?? 'sin dato'}`,
   })
   return true
 }
@@ -1662,6 +1763,7 @@ const createCustomerFromInput = async (chatId: number, companyId: string, data: 
 const formatCustomerDetails = (customer: Customer) =>
   [
     `Cliente: ${customer.name}`,
+    `Cédula: ${formatOptionalText(customer.documentNumber ?? null)}`,
     `Teléfono: ${formatOptionalText(customer.phone ?? null)}`,
     `Ciudad: ${formatOptionalText(customer.city ?? null)}`,
     `Dirección: ${formatOptionalText(customer.address ?? null)}`,
@@ -1707,15 +1809,17 @@ const startGuidedCustomer = async (chatId: number, companyId: string, prefill?: 
 
   const data: GuidedCustomerData = {
     name: prefill?.name?.trim() ?? null,
+    documentNumber: prefill?.documentNumber?.trim() ?? null,
     phone: prefill?.phone?.trim() ?? null,
     city: prefill?.city?.trim() ?? null,
     address: prefill?.address?.trim() ?? null,
   }
 
   let step: GuidedCustomerStep = 'name'
-  if (data.name) step = data.phone ? 'city' : 'phone'
-  if (data.name && data.phone && (data.city || data.address)) step = data.address ? 'confirm' : 'address'
-  if (data.name && data.phone && !data.city && !data.address) step = 'city'
+  if (data.name) step = data.documentNumber ? 'phone' : 'documentNumber'
+  if (data.name && data.documentNumber && data.phone) step = 'city'
+  if (data.name && data.documentNumber && data.phone && (data.city || data.address)) step = data.address ? 'confirm' : 'address'
+  if (data.name && data.documentNumber && data.phone && !data.city && !data.address) step = 'city'
 
   const meta: GuidedCustomerMetadata = { step }
 
@@ -1732,6 +1836,11 @@ const startGuidedCustomer = async (chatId: number, companyId: string, prefill?: 
 
   if (meta.step === 'name') {
     await askGuidedCustomerName(chatId)
+    return
+  }
+
+  if (meta.step === 'documentNumber') {
+    await askGuidedCustomerDocument(chatId)
     return
   }
 
@@ -1776,6 +1885,23 @@ const handleGuidedCustomerMessage = async (pending: PendingEvent, chatId: number
     }
 
     data.name = text
+    meta.step = 'documentNumber'
+    await updateGuidedCustomerState(pending.id, data, meta)
+    await askGuidedCustomerDocument(chatId)
+    return true
+  }
+
+  if (meta.step === 'documentNumber') {
+    const documentNumber = normalizeCustomerDocumentInput(text)
+    if (!isValidCustomerDocument(documentNumber)) {
+      await TelegramClient.sendMessage({
+        chatId,
+        text: 'La cédula/documento no parece válida. Escribe al menos 5 caracteres.',
+      })
+      return true
+    }
+
+    data.documentNumber = documentNumber
     meta.step = 'phone'
     await updateGuidedCustomerState(pending.id, data, meta)
     await askGuidedCustomerPhone(chatId)
@@ -1836,7 +1962,7 @@ const handleGuidedCustomerMessage = async (pending: PendingEvent, chatId: number
 
     await TelegramClient.sendMessage({
       chatId,
-      text: 'Escribe "confirmar" para crear el cliente o "cancelar".',
+      text: 'Escribe "confirmar" para guardar el cliente (crear o actualizar) o "cancelar".',
       replyMarkup: buildConfirmCancelKeyboard(),
     })
     return true
@@ -3337,6 +3463,7 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
         companyId: pending.companyId,
         companyName: null,
         customerName: data.customerName ?? null,
+        customerDocumentNumber: invoiceCustomer?.documentNumber ?? null,
         customerPhone: invoiceCustomer?.phone ?? null,
         customerCity: invoiceCustomer?.city ?? null,
         customerAddress: invoiceCustomer?.address ?? null,
@@ -4013,7 +4140,13 @@ router.post('/webhook', async (req: Request, res: Response) => {
             return res.status(200).json({ ok: true })
           }
 
-          if (parsedCustomer.name && parsedCustomer.phone && isValidCustomerPhone(parsedCustomer.phone)) {
+          if (
+            parsedCustomer.name &&
+            parsedCustomer.documentNumber &&
+            isValidCustomerDocument(parsedCustomer.documentNumber) &&
+            parsedCustomer.phone &&
+            isValidCustomerPhone(parsedCustomer.phone)
+          ) {
             await createCustomerFromInput(chatId, user.companyId, parsedCustomer)
             return res.status(200).json({ ok: true })
           }

@@ -7,6 +7,7 @@ export type Product = Readonly<{
   name: string
   sku: Sku
   costUnit: number
+  saleUnit: number
   active: boolean
   createdAt: Date
   updatedAt: Date

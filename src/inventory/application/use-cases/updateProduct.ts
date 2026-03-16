@@ -11,6 +11,7 @@ export type UpdateProductCommand = Readonly<{
   productId: string
   name?: string
   costUnit?: number
+  saleUnit?: number
   active?: boolean
 }>
 
@@ -26,11 +27,15 @@ export function makeUpdateProduct(deps: Readonly<{ productRepo: ProductRepo }>) 
     if (command.costUnit !== undefined && command.costUnit < 0) {
       return Result.err({ type: 'InvalidQuantity', message: 'costUnit must be >= 0' })
     }
+    if (command.saleUnit !== undefined && command.saleUnit < 0) {
+      return Result.err({ type: 'InvalidQuantity', message: 'saleUnit must be >= 0' })
+    }
 
     const updated: Product = {
       ...product,
       name: command.name ?? product.name,
       costUnit: command.costUnit ?? product.costUnit,
+      saleUnit: command.saleUnit ?? product.saleUnit,
       active: command.active ?? product.active,
       updatedAt: new Date(),
     }

@@ -6,6 +6,7 @@ export function serializeAdminProduct(product: Product) {
     name: product.name,
     sku: product.sku,
     costUnit: product.costUnit,
+    saleUnit: product.saleUnit,
     active: product.active,
     createdAt: product.createdAt,
     updatedAt: product.updatedAt,

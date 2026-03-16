@@ -8,6 +8,7 @@ function serializeAdminProduct(product) {
         name: product.name,
         sku: product.sku,
         costUnit: product.costUnit,
+        saleUnit: product.saleUnit,
         active: product.active,
         createdAt: product.createdAt,
         updatedAt: product.updatedAt,

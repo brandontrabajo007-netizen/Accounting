@@ -39,6 +39,7 @@ const ArCustomerSchema = new mongoose_1.Schema({
     companyId: { type: String, required: true, index: true },
     name: { type: String, required: true },
     normalizedName: { type: String, required: true },
+    documentNumber: { type: String },
     phone: { type: String },
     city: { type: String },
     address: { type: String },

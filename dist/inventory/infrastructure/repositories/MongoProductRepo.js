@@ -14,12 +14,15 @@ function normalizeCostUnit(value) {
     return 0;
 }
 function toDomain(doc) {
+    const costUnit = normalizeCostUnit(doc.costUnit);
+    const saleUnit = normalizeCostUnit(doc.saleUnit ?? doc.costUnit);
     return {
         id: ProductId_1.ProductId.from(doc._id),
         companyId: doc.companyId,
         name: doc.name,
         sku: Sku_1.Sku.from(doc.sku),
-        costUnit: normalizeCostUnit(doc.costUnit),
+        costUnit,
+        saleUnit,
         active: doc.active,
         createdAt: doc.createdAt,
         updatedAt: doc.updatedAt,
@@ -41,6 +44,7 @@ class MongoProductRepo {
             name: product.name,
             sku: product.sku,
             costUnit: product.costUnit,
+            saleUnit: product.saleUnit,
             active: product.active,
             createdAt: product.createdAt,
             updatedAt: product.updatedAt,
@@ -52,6 +56,7 @@ class MongoProductRepo {
                 name: product.name,
                 sku: product.sku,
                 costUnit: product.costUnit,
+                saleUnit: product.saleUnit,
                 active: product.active,
                 updatedAt: product.updatedAt,
             },

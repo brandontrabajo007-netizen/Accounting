@@ -13,6 +13,7 @@ export type CreateProductCommand = Readonly<{
   name: string
   sku: string
   costUnit: number
+  saleUnit?: number
   active: boolean
 }>
 
@@ -27,6 +28,9 @@ export function makeCreateProduct(deps: Readonly<{ productRepo: ProductRepo; idG
     if (command.costUnit < 0) {
       return Result.err({ type: 'InvalidQuantity', message: 'costUnit must be >= 0' })
     }
+    if (command.saleUnit !== undefined && command.saleUnit < 0) {
+      return Result.err({ type: 'InvalidQuantity', message: 'saleUnit must be >= 0' })
+    }
 
     const existing = await deps.productRepo.getBySku(command.companyId, Sku.from(command.sku))
     if (existing) {
@@ -40,6 +44,7 @@ export function makeCreateProduct(deps: Readonly<{ productRepo: ProductRepo; idG
       name: command.name,
       sku: Sku.from(command.sku),
       costUnit: command.costUnit,
+      saleUnit: command.saleUnit ?? command.costUnit,
       active: command.active,
       createdAt: now,
       updatedAt: now,

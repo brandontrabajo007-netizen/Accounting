@@ -19,16 +19,21 @@ function toDomain(doc: {
   name: string
   sku: string
   costUnit: number | { amount?: number; currency?: string }
+  saleUnit?: number | { amount?: number; currency?: string }
   active: boolean
   createdAt: Date
   updatedAt: Date
 }): Product {
+  const costUnit = normalizeCostUnit(doc.costUnit)
+  const saleUnit = normalizeCostUnit(doc.saleUnit ?? doc.costUnit)
+
   return {
     id: ProductId.from(doc._id),
     companyId: doc.companyId,
     name: doc.name,
     sku: Sku.from(doc.sku),
-    costUnit: normalizeCostUnit(doc.costUnit),
+    costUnit,
+    saleUnit,
     active: doc.active,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
@@ -53,6 +58,7 @@ export class MongoProductRepo implements ProductRepo {
       name: product.name,
       sku: product.sku,
       costUnit: product.costUnit,
+      saleUnit: product.saleUnit,
       active: product.active,
       createdAt: product.createdAt,
       updatedAt: product.updatedAt,
@@ -67,6 +73,7 @@ export class MongoProductRepo implements ProductRepo {
           name: product.name,
           sku: product.sku,
           costUnit: product.costUnit,
+          saleUnit: product.saleUnit,
           active: product.active,
           updatedAt: product.updatedAt,
         },

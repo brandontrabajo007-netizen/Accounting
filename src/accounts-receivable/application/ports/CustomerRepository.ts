@@ -12,8 +12,20 @@ export interface CustomerRepository {
     companyId: string
     name: string
     normalizedName: string
+    documentNumber?: string | null
     phone?: string | null
     city?: string | null
     address?: string | null
   }): Promise<Customer>
+  updateById(
+    id: string,
+    data: {
+      name?: string
+      normalizedName?: string
+      documentNumber?: string | null
+      phone?: string | null
+      city?: string | null
+      address?: string | null
+    },
+  ): Promise<Customer | null>
 }

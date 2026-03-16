@@ -16,11 +16,13 @@ exports.createProductSchema = zod_1.z.object({
     name: zod_1.z.string().min(1),
     sku: zod_1.z.string().min(1),
     costUnit: zod_1.z.number().min(0),
+    saleUnit: zod_1.z.number().min(0).optional(),
     active: zod_1.z.boolean(),
 });
 exports.updateProductSchema = zod_1.z.object({
     name: zod_1.z.string().min(1).optional(),
     costUnit: zod_1.z.number().min(0).optional(),
+    saleUnit: zod_1.z.number().min(0).optional(),
     active: zod_1.z.boolean().optional(),
 });
 exports.createVariantSchema = zod_1.z.object({

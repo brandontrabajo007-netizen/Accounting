@@ -7,6 +7,7 @@ const toDomain = (doc) => ({
     companyId: doc.companyId,
     name: doc.name,
     normalizedName: doc.normalizedName,
+    documentNumber: doc.documentNumber ?? null,
     phone: doc.phone ?? null,
     city: doc.city ?? null,
     address: doc.address ?? null,
@@ -47,11 +48,29 @@ class MongoArCustomerRepository {
             companyId: data.companyId,
             name: data.name,
             normalizedName: data.normalizedName,
+            documentNumber: data.documentNumber?.trim() || undefined,
             phone: data.phone?.trim() || undefined,
             city: data.city?.trim() || undefined,
             address: data.address?.trim() || undefined,
         });
         return toDomain(doc);
+    }
+    async updateById(id, data) {
+        const payload = {};
+        if (data.name !== undefined)
+            payload.name = data.name.trim();
+        if (data.normalizedName !== undefined)
+            payload.normalizedName = data.normalizedName.trim();
+        if (data.documentNumber !== undefined)
+            payload.documentNumber = data.documentNumber?.trim() || undefined;
+        if (data.phone !== undefined)
+            payload.phone = data.phone?.trim() || undefined;
+        if (data.city !== undefined)
+            payload.city = data.city?.trim() || undefined;
+        if (data.address !== undefined)
+            payload.address = data.address?.trim() || undefined;
+        const doc = await ArCustomerModel_1.ArCustomerMongoModel.findByIdAndUpdate(id, payload, { new: true }).lean();
+        return doc ? toDomain(doc) : null;
     }
 }
 exports.MongoArCustomerRepository = MongoArCustomerRepository;

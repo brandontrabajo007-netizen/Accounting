@@ -12,10 +12,14 @@ function makeUpdateProduct(deps) {
         if (command.costUnit !== undefined && command.costUnit < 0) {
             return Result_1.Result.err({ type: 'InvalidQuantity', message: 'costUnit must be >= 0' });
         }
+        if (command.saleUnit !== undefined && command.saleUnit < 0) {
+            return Result_1.Result.err({ type: 'InvalidQuantity', message: 'saleUnit must be >= 0' });
+        }
         const updated = {
             ...product,
             name: command.name ?? product.name,
             costUnit: command.costUnit ?? product.costUnit,
+            saleUnit: command.saleUnit ?? product.saleUnit,
             active: command.active ?? product.active,
             updatedAt: new Date(),
         };

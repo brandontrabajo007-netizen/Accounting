@@ -9,6 +9,9 @@ function makeCreateProduct(deps) {
         if (command.costUnit < 0) {
             return Result_1.Result.err({ type: 'InvalidQuantity', message: 'costUnit must be >= 0' });
         }
+        if (command.saleUnit !== undefined && command.saleUnit < 0) {
+            return Result_1.Result.err({ type: 'InvalidQuantity', message: 'saleUnit must be >= 0' });
+        }
         const existing = await deps.productRepo.getBySku(command.companyId, Sku_1.Sku.from(command.sku));
         if (existing) {
             return Result_1.Result.err({ type: 'DuplicateSku', sku: command.sku });
@@ -20,6 +23,7 @@ function makeCreateProduct(deps) {
             name: command.name,
             sku: Sku_1.Sku.from(command.sku),
             costUnit: command.costUnit,
+            saleUnit: command.saleUnit ?? command.costUnit,
             active: command.active,
             createdAt: now,
             updatedAt: now,

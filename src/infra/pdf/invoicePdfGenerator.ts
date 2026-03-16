@@ -11,6 +11,7 @@ export type InvoicePdfModel = {
   companyId?: string | null
   companyName?: string | null
   customerName?: string | null
+  customerDocumentNumber?: string | null
   customerPhone?: string | null
   customerCity?: string | null
   customerAddress?: string | null
@@ -113,8 +114,13 @@ export const generateInvoicePdfBuffer = (model: InvoicePdfModel): Promise<Buffer
         width: Math.round(contentWidth / 2) - 20,
       })
 
-      doc.fillColor('#52606d').text('Telefono', infoLeftX, infoTopY + rowGap * 2)
-      doc.fillColor('#1f2933').text(model.customerPhone ?? 'sin dato', infoLeftX, infoTopY + rowGap * 2 + labelValueGap, {
+      doc.fillColor('#52606d').text('Cedula', infoLeftX, infoTopY + rowGap * 2)
+      doc.fillColor('#1f2933').text(model.customerDocumentNumber ?? 'sin dato', infoLeftX, infoTopY + rowGap * 2 + labelValueGap, {
+        width: Math.round(contentWidth / 2) - 20,
+      })
+
+      doc.fillColor('#52606d').text('Telefono', infoLeftX, infoTopY + rowGap * 3)
+      doc.fillColor('#1f2933').text(model.customerPhone ?? 'sin dato', infoLeftX, infoTopY + rowGap * 3 + labelValueGap, {
         width: Math.round(contentWidth / 2) - 20,
       })
 
@@ -131,11 +137,10 @@ export const generateInvoicePdfBuffer = (model: InvoicePdfModel): Promise<Buffer
         width: Math.round(contentWidth / 2) - 20,
       })
 
-      doc.fillColor('#52606d').text('Direccion', infoLeftX, infoTopY + rowGap * 3)
-      doc.fillColor('#1f2933').text(model.customerAddress ?? 'sin dato', infoLeftX, infoTopY + rowGap * 3 + labelValueGap, {
-        width: contentWidth - 24,
+      doc.fillColor('#52606d').text('Direccion', infoRightX, infoTopY + rowGap * 3)
+      doc.fillColor('#1f2933').text(model.customerAddress ?? 'sin dato', infoRightX, infoTopY + rowGap * 3 + labelValueGap, {
+        width: Math.round(contentWidth / 2) - 20,
       })
-
       doc.moveDown(4)
       doc.fillColor('#1f2933').font('Helvetica-Bold').fontSize(11).text('Detalle de la venta')
       doc.moveDown(0.5)

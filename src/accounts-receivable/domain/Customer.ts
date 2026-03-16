@@ -3,6 +3,7 @@ export interface Customer {
   companyId: string
   name: string
   normalizedName: string
+  documentNumber?: string | null
   phone?: string | null
   city?: string | null
   address?: string | null

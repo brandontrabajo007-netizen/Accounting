@@ -16,12 +16,14 @@ export const createProductSchema = z.object({
   name: z.string().min(1),
   sku: z.string().min(1),
   costUnit: z.number().min(0),
+  saleUnit: z.number().min(0).optional(),
   active: z.boolean(),
 })
 
 export const updateProductSchema = z.object({
   name: z.string().min(1).optional(),
   costUnit: z.number().min(0).optional(),
+  saleUnit: z.number().min(0).optional(),
   active: z.boolean().optional(),
 })
 

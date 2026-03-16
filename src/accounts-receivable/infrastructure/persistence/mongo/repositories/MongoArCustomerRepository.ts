@@ -7,6 +7,7 @@ interface ArCustomerDocument {
   companyId: string
   name: string
   normalizedName: string
+  documentNumber?: string | null
   phone?: string | null
   city?: string | null
   address?: string | null
@@ -18,6 +19,7 @@ const toDomain = (doc: ArCustomerDocument): Customer => ({
   companyId: doc.companyId,
   name: doc.name,
   normalizedName: doc.normalizedName,
+  documentNumber: doc.documentNumber ?? null,
   phone: doc.phone ?? null,
   city: doc.city ?? null,
   address: doc.address ?? null,
@@ -67,6 +69,7 @@ export class MongoArCustomerRepository implements CustomerRepository {
     companyId: string
     name: string
     normalizedName: string
+    documentNumber?: string | null
     phone?: string | null
     city?: string | null
     address?: string | null
@@ -75,10 +78,33 @@ export class MongoArCustomerRepository implements CustomerRepository {
       companyId: data.companyId,
       name: data.name,
       normalizedName: data.normalizedName,
+      documentNumber: data.documentNumber?.trim() || undefined,
       phone: data.phone?.trim() || undefined,
       city: data.city?.trim() || undefined,
       address: data.address?.trim() || undefined,
     })
     return toDomain(doc)
+  }
+
+  async updateById(
+    id: string,
+    data: {
+      name?: string
+      normalizedName?: string
+      documentNumber?: string | null
+      phone?: string | null
+      city?: string | null
+      address?: string | null
+    },
+  ): Promise<Customer | null> {
+    const payload: Record<string, unknown> = {}
+    if (data.name !== undefined) payload.name = data.name.trim()
+    if (data.normalizedName !== undefined) payload.normalizedName = data.normalizedName.trim()
+    if (data.documentNumber !== undefined) payload.documentNumber = data.documentNumber?.trim() || undefined
+    if (data.phone !== undefined) payload.phone = data.phone?.trim() || undefined
+    if (data.city !== undefined) payload.city = data.city?.trim() || undefined
+    if (data.address !== undefined) payload.address = data.address?.trim() || undefined
+    const doc = await ArCustomerMongoModel.findByIdAndUpdate(id, payload, { new: true }).lean()
+    return doc ? toDomain(doc) : null
   }
 }
