@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.inventoryGateway = exports.processJournalEntry = exports.domainEventBus = exports.accountsPayableOrchestrator = exports.accountsReceivableOrchestrator = exports.reportPdfGenerator = exports.resolvePeriodId = exports.periodAccessGuard = exports.ledgerMovementRepository = exports.transactionRunner = exports.ledgerSnapshotRepository = exports.periodResultRepository = exports.accountingPeriodRepository = exports.incomeStatementRepository = exports.ledgerPoster = exports.pendingEventRepository = exports.supplierHistoryService = exports.supplierHistoryRepository = exports.customerHistoryService = exports.customerHistoryRepository = exports.apSettingsRepository = exports.apEntryRepository = exports.apSupplierRepository = exports.arSettingsRepository = exports.arEntryRepository = exports.arCustomerRepository = exports.supplierPaymentAccountMappingRepository = exports.customerPaymentAccountMappingRepository = exports.payrollAccountMappingRepository = exports.purchaseAccountMappingRepository = exports.userRepository = exports.journalEntryRepository = exports.saleAccountMappingRepository = exports.accountRepository = void 0;
+exports.inventoryGateway = exports.processJournalEntry = exports.domainEventBus = exports.accountsPayableOrchestrator = exports.accountsReceivableOrchestrator = exports.reportPdfGenerator = exports.resolvePeriodId = exports.periodAccessGuard = exports.ledgerMovementRepository = exports.transactionRunner = exports.ledgerSnapshotRepository = exports.periodResultRepository = exports.accountingPeriodRepository = exports.incomeStatementRepository = exports.ledgerPoster = exports.pendingEventRepository = exports.supplierHistoryService = exports.supplierHistoryRepository = exports.customerHistoryService = exports.customerHistoryRepository = exports.apSettingsRepository = exports.apEntryRepository = exports.apSupplierRepository = exports.arSettingsRepository = exports.arEntryRepository = exports.arCustomerRepository = exports.invoiceIssuerSettingsRepository = exports.supplierPaymentAccountMappingRepository = exports.customerPaymentAccountMappingRepository = exports.payrollAccountMappingRepository = exports.purchaseAccountMappingRepository = exports.userRepository = exports.journalEntryRepository = exports.saleAccountMappingRepository = exports.accountRepository = void 0;
 // Application use-cases/services
 const onAccountingPeriodClosedCreateClosingEntry_1 = require("@application/accounting-periods/handlers/onAccountingPeriodClosedCreateClosingEntry");
 const onAccountingPeriodClosedCreateLedgerSnapshot_1 = require("@application/accounting-periods/handlers/onAccountingPeriodClosedCreateLedgerSnapshot");
@@ -27,6 +27,7 @@ const MongoPurchaseAccountMappingRepository_1 = require("@infra/persistence/mong
 const MongoSaleAccountMappingRepository_1 = require("@infra/persistence/mongo/repositories/MongoSaleAccountMappingRepository");
 const MongoSupplierPaymentAccountMappingRepository_1 = require("@infra/persistence/mongo/repositories/MongoSupplierPaymentAccountMappingRepository");
 const MongoUserRepository_1 = require("@infra/persistence/mongo/repositories/MongoUserRepository");
+const MongoInvoiceIssuerSettingsRepository_1 = require("@infra/persistence/mongo/repositories/MongoInvoiceIssuerSettingsRepository");
 const makeMongoAccountingPeriodRepository_1 = require("@infra/persistence/mongo/repositories/makeMongoAccountingPeriodRepository");
 const makeMongoLedgerSnapshotRepository_1 = require("@infra/persistence/mongo/repositories/makeMongoLedgerSnapshotRepository");
 const makeMongoPeriodResultRepository_1 = require("@infra/persistence/mongo/repositories/makeMongoPeriodResultRepository");
@@ -55,6 +56,7 @@ exports.purchaseAccountMappingRepository = new MongoPurchaseAccountMappingReposi
 exports.payrollAccountMappingRepository = new MongoPayrollAccountMappingRepository_1.MongoPayrollAccountMappingRepository();
 exports.customerPaymentAccountMappingRepository = new MongoCustomerPaymentAccountMappingRepository_1.MongoCustomerPaymentAccountMappingRepository();
 exports.supplierPaymentAccountMappingRepository = new MongoSupplierPaymentAccountMappingRepository_1.MongoSupplierPaymentAccountMappingRepository();
+exports.invoiceIssuerSettingsRepository = new MongoInvoiceIssuerSettingsRepository_1.MongoInvoiceIssuerSettingsRepository();
 // Accounts Receivable
 exports.arCustomerRepository = new MongoArCustomerRepository_1.MongoArCustomerRepository();
 exports.arEntryRepository = new MongoArEntryRepository_1.MongoArEntryRepository();
@@ -118,6 +120,10 @@ exports.inventoryGateway = {
     idGenerator: dependencies_1.idGenerator,
     listProducts: (input) => dependencies_1.productRepo.list(input),
     listVariantsByProductId: (companyId, productId) => dependencies_1.variantRepo.listByProductId(companyId, ProductId_1.ProductId.from(productId)),
+    getReservationById: (companyId, reservationId) => dependencies_1.reservationRepo.getById(companyId, reservationId),
+    getProductById: (companyId, productId) => dependencies_1.productRepo.getById(companyId, ProductId_1.ProductId.from(productId)),
+    findSaleMovements: (companyId, saleId) => dependencies_1.movementRepo.findByReference(companyId, 'SALE', saleId),
+    getSaleCost: dependencies_1.getSaleCost,
     confirmSale: dependencies_1.confirmSale,
     reverseSale: dependencies_1.reverseSale,
 };

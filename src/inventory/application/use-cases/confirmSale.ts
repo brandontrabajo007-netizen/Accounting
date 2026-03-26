@@ -22,6 +22,7 @@ export type ConfirmSaleCommand = Readonly<{
   saleId: string
   items: ReadonlyArray<{ productId: string; variantId: string; qty: number }>
   reference: string
+  ignoreActiveReservations?: boolean
 }>
 
 export type ConfirmSaleResult = Readonly<{
@@ -95,7 +96,8 @@ export function makeConfirmSale(
         product.id,
         variant.id,
       )
-      const reservedActiveQty = deps.reservationRepo
+      const reservedActiveQty =
+        deps.reservationRepo && !command.ignoreActiveReservations
         ? await deps.reservationRepo.listActiveQtyByVariant(command.companyId, VariantId.from(item.variantId))
         : 0
       const stock = computeAvailableStock(movementsForVariant, reservedActiveQty)

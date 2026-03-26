@@ -25,6 +25,7 @@ import { MongoPurchaseAccountMappingRepository } from '@infra/persistence/mongo/
 import { MongoSaleAccountMappingRepository } from '@infra/persistence/mongo/repositories/MongoSaleAccountMappingRepository'
 import { MongoSupplierPaymentAccountMappingRepository } from '@infra/persistence/mongo/repositories/MongoSupplierPaymentAccountMappingRepository'
 import { MongoUserRepository } from '@infra/persistence/mongo/repositories/MongoUserRepository'
+import { MongoInvoiceIssuerSettingsRepository } from '@infra/persistence/mongo/repositories/MongoInvoiceIssuerSettingsRepository'
 import { makeMongoAccountingPeriodRepository } from '@infra/persistence/mongo/repositories/makeMongoAccountingPeriodRepository'
 import { makeMongoLedgerSnapshotRepository } from '@infra/persistence/mongo/repositories/makeMongoLedgerSnapshotRepository'
 import { makeMongoPeriodResultRepository } from '@infra/persistence/mongo/repositories/makeMongoPeriodResultRepository'
@@ -42,8 +43,11 @@ import { MongoApSupplierRepository } from '@accounts-payable/infrastructure/pers
 import { ProductId } from '@inventory/domain/value-objects/ProductId'
 import {
   confirmSale as inventoryConfirmSale,
+  getSaleCost as inventoryGetSaleCost,
   idGenerator as inventoryIdGenerator,
+  movementRepo as inventoryMovementRepo,
   productRepo as inventoryProductRepo,
+  reservationRepo as inventoryReservationRepo,
   reverseSale as inventoryReverseSale,
   variantRepo as inventoryVariantRepo,
 } from '@inventory/infrastructure/http/dependencies'
@@ -63,6 +67,7 @@ export const purchaseAccountMappingRepository = new MongoPurchaseAccountMappingR
 export const payrollAccountMappingRepository = new MongoPayrollAccountMappingRepository()
 export const customerPaymentAccountMappingRepository = new MongoCustomerPaymentAccountMappingRepository()
 export const supplierPaymentAccountMappingRepository = new MongoSupplierPaymentAccountMappingRepository()
+export const invoiceIssuerSettingsRepository = new MongoInvoiceIssuerSettingsRepository()
 
 // Accounts Receivable
 export const arCustomerRepository = new MongoArCustomerRepository()
@@ -135,6 +140,13 @@ export const inventoryGateway = {
   listProducts: (input: Parameters<typeof inventoryProductRepo.list>[0]) => inventoryProductRepo.list(input),
   listVariantsByProductId: (companyId: string, productId: string) =>
     inventoryVariantRepo.listByProductId(companyId, ProductId.from(productId)),
+  getReservationById: (companyId: string, reservationId: string) =>
+    inventoryReservationRepo.getById(companyId, reservationId),
+  getProductById: (companyId: string, productId: string) =>
+    inventoryProductRepo.getById(companyId, ProductId.from(productId)),
+  findSaleMovements: (companyId: string, saleId: string) =>
+    inventoryMovementRepo.findByReference(companyId, 'SALE', saleId),
+  getSaleCost: inventoryGetSaleCost,
   confirmSale: inventoryConfirmSale,
   reverseSale: inventoryReverseSale,
 }

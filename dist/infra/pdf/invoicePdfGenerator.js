@@ -23,6 +23,7 @@ const formatCurrency = (value) => value.toLocaleString('es-CO', {
     currency: 'COP',
     maximumFractionDigits: 0,
 });
+const DEFAULT_INVOICE_LEGAL_DISCLAIMER = 'Esta factura de venta se asimila en todos los efectos legales a una letra de cambio segun Art. 774 del Codigo de Comercio, se hace constar que la firma de una persona distinta al comprador implica que dicha persona esta autorizada por el comprador para firmar y recibir, confesar y obligar al comprador a cancelar.';
 const generateInvoicePdfBuffer = (model) => {
     return new Promise((resolve, reject) => {
         try {
@@ -34,7 +35,16 @@ const generateInvoicePdfBuffer = (model) => {
             const marginLeft = doc.page?.margins?.left ?? 50;
             const marginRight = doc.page?.margins?.right ?? 50;
             const contentWidth = pageWidth - marginLeft - marginRight;
-            const headerHeight = 90;
+            const companyHeadline = (model.companyName ?? '').trim() || (model.companyId ?? '').trim() || null;
+            const companyMetaParts = [];
+            if ((model.companyTaxId ?? '').trim())
+                companyMetaParts.push(`NIT/Cedula: ${(model.companyTaxId ?? '').trim()}`);
+            if ((model.companyPhone ?? '').trim())
+                companyMetaParts.push(`Contacto: ${(model.companyPhone ?? '').trim()}`);
+            const companyMetaLine = companyMetaParts.length > 0 ? companyMetaParts.join(' | ') : null;
+            const companyAddressLine = (model.companyAddress ?? '').trim() ? `Direccion: ${(model.companyAddress ?? '').trim()}` : null;
+            const companyLinesCount = [companyHeadline, companyMetaLine, companyAddressLine].filter(Boolean).length;
+            const headerHeight = 90 + (companyLinesCount > 2 ? (companyLinesCount - 2) * 12 : 0);
             doc.save();
             doc.rect(0, 0, pageWidth, headerHeight).fill('#f3f5f7');
             doc.restore();
@@ -42,14 +52,23 @@ const generateInvoicePdfBuffer = (model) => {
                 width: contentWidth,
                 align: 'left',
             });
-            if (model.companyId) {
-                doc.fillColor('#52606d').font('Helvetica').fontSize(10).text(`Empresa: ${model.companyId}`, marginLeft, 52, {
+            let companyLineY = 52;
+            if (companyHeadline) {
+                doc.fillColor('#52606d').font('Helvetica').fontSize(10).text(`Empresa: ${companyHeadline}`, marginLeft, companyLineY, {
                     width: contentWidth,
                     align: 'left',
                 });
+                companyLineY += 12;
             }
-            if (model.companyName) {
-                doc.fillColor('#52606d').font('Helvetica').fontSize(10).text(model.companyName, marginLeft, 66, {
+            if (companyMetaLine) {
+                doc.fillColor('#52606d').font('Helvetica').fontSize(8).text(companyMetaLine, marginLeft, companyLineY, {
+                    width: contentWidth,
+                    align: 'left',
+                });
+                companyLineY += 10;
+            }
+            if (companyAddressLine) {
+                doc.fillColor('#52606d').font('Helvetica').fontSize(8).text(companyAddressLine, marginLeft, companyLineY, {
                     width: contentWidth,
                     align: 'left',
                 });
@@ -151,6 +170,18 @@ const generateInvoicePdfBuffer = (model) => {
             if (showCreditBreakdown) {
                 doc.font('Helvetica').fontSize(10).fillColor('#334e68').text(`Abono: ${formatCurrency(downPaymentAmount)}`, { align: 'right' });
                 doc.font('Helvetica-Bold').fontSize(11).fillColor('#1f2933').text(`Saldo pendiente: ${formatCurrency(pendingAmount)}`, { align: 'right' });
+            }
+            const legalDisclaimer = (model.legalDisclaimer ?? DEFAULT_INVOICE_LEGAL_DISCLAIMER).trim();
+            if (legalDisclaimer) {
+                doc.moveDown(0.6);
+                doc
+                    .font('Helvetica')
+                    .fontSize(7)
+                    .fillColor('#7b8794')
+                    .text(legalDisclaimer, marginLeft, doc.y, {
+                    width: contentWidth,
+                    align: 'justify',
+                });
             }
             const signatureSectionHeight = 132;
             const bottomLimit = (doc.page?.height ?? 841.89) - (doc.page?.margins?.bottom ?? 50);

@@ -4,6 +4,7 @@ export type PendingEventType =
   | 'sale'
   | 'sale_guided'
   | 'invoice_signature'
+  | 'invoice_issuer_guided'
   | 'purchase'
   | 'payroll'
   | 'customer_payment'

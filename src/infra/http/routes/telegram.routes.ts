@@ -41,6 +41,7 @@ import {
   customerHistoryRepository,
   customerHistoryService,
   customerPaymentAccountMappingRepository,
+  invoiceIssuerSettingsRepository,
   inventoryGateway,
   journalEntryRepository,
   payrollAccountMappingRepository,
@@ -198,6 +199,9 @@ Con mis superpoderes puedo:
 "Guíame para crear cliente"
 "Crear cliente: Juan Pérez, cédula: 123456789, teléfono: 3001234567, ciudad: Cali, dirección: Cra 10 # 20-30"
 "Consultar cliente: Juan Pérez"
+
+🏢 *Datos de la empresa para factura:*
+"Llenar datos de la empresa"
 
 ¡Cuéntame qué vendiste, compraste o pagaste! 🚀
 `.trim()
@@ -477,11 +481,27 @@ type GuidedCustomerMetadata = {
   step: GuidedCustomerStep
 }
 
+type GuidedInvoiceIssuerData = {
+  companyName?: string | null
+  taxId?: string | null
+  contactPhone?: string | null
+  address?: string | null
+}
+
+type GuidedInvoiceIssuerStep = 'companyName' | 'taxId' | 'contactPhone' | 'address' | 'confirm'
+
+type GuidedInvoiceIssuerMetadata = {
+  step: GuidedInvoiceIssuerStep
+}
+
 type InvoiceSignatureStep = 'seller' | 'customer' | 'done'
 
 type InvoiceSignatureData = {
   companyId?: string | null
   companyName?: string | null
+  companyTaxId?: string | null
+  companyPhone?: string | null
+  companyAddress?: string | null
   customerName?: string | null
   customerDocumentNumber?: string | null
   customerPhone?: string | null
@@ -515,6 +535,11 @@ const isGuidedSaleCommand = (value: string) => {
 const isGuidedCustomerCommand = (value: string) => {
   const text = normalizeText(value)
   return /\b(gu[ií]ame para crear cliente|guiame para crear cliente|crear cliente guiado|crear cliente|nuevo cliente|registrar cliente)\b/.test(text)
+}
+
+const isGuidedInvoiceIssuerCommand = (value: string) => {
+  const text = normalizeText(value)
+  return /\b(llenar datos de la empresa|datos de la empresa|configurar datos de la empresa|configurar empresa|datos de factura|configurar factura)\b/.test(text)
 }
 
 const parseCustomerCreateMessage = (
@@ -1072,9 +1097,14 @@ const getInvoiceSignatureMeta = (pending: PendingEvent): InvoiceSignatureMeta | 
 
 const completeSignedInvoiceForPending = async (pending: PendingEvent, meta: InvoiceSignatureMeta): Promise<void> => {
   const invoice = pending.interpretedData as InvoiceSignatureData
+  const companyId = invoice.companyId ?? pending.companyId
+  const companySettings = await invoiceIssuerSettingsRepository.getByCompanyId(companyId)
   const invoiceBuffer = await generateInvoicePdfBuffer({
-    companyId: invoice.companyId ?? pending.companyId,
-    companyName: invoice.companyName ?? null,
+    companyId,
+    companyName: invoice.companyName ?? companySettings?.companyName ?? null,
+    companyTaxId: invoice.companyTaxId ?? companySettings?.taxId ?? null,
+    companyPhone: invoice.companyPhone ?? companySettings?.contactPhone ?? null,
+    companyAddress: invoice.companyAddress ?? companySettings?.address ?? null,
     customerName: invoice.customerName ?? null,
     customerDocumentNumber: invoice.customerDocumentNumber ?? null,
     customerPhone: invoice.customerPhone ?? null,
@@ -1982,6 +2012,297 @@ const handleGuidedCustomerCallback = async (pending: PendingEvent, chatId: numbe
     const { data } = getGuidedCustomerState(pending)
     const created = await createCustomerFromInput(chatId, pending.companyId, data)
     if (created) {
+      await pendingEventRepository.updateStatus(pending.id, 'CONFIRMED')
+    }
+    return true
+  }
+
+  return false
+}
+
+const getGuidedInvoiceIssuerState = (pending: PendingEvent): { data: GuidedInvoiceIssuerData; meta: GuidedInvoiceIssuerMetadata } => {
+  const rawData = pending.interpretedData ?? {}
+  const rawMeta = pending.metadata ?? {}
+
+  const companyName = typeof rawData.companyName === 'string' ? rawData.companyName : rawData.companyName === null ? null : undefined
+  const taxId =
+    typeof rawData.taxId === 'string'
+      ? rawData.taxId
+      : rawData.taxId === null
+        ? null
+        : typeof rawData.nit === 'string'
+          ? rawData.nit
+          : rawData.nit === null
+            ? null
+            : undefined
+  const contactPhone = typeof rawData.contactPhone === 'string' ? rawData.contactPhone : rawData.contactPhone === null ? null : undefined
+  const address = typeof rawData.address === 'string' ? rawData.address : rawData.address === null ? null : undefined
+
+  return {
+    data: { companyName, taxId, contactPhone, address },
+    meta: { step: (rawMeta.step as GuidedInvoiceIssuerStep) ?? 'companyName' },
+  }
+}
+
+const updateGuidedInvoiceIssuerState = async (pendingId: string, data: GuidedInvoiceIssuerData, meta: GuidedInvoiceIssuerMetadata) => {
+  await pendingEventRepository.updateData(pendingId, data as Record<string, unknown>, meta as Record<string, unknown>)
+}
+
+const isValidInvoiceIssuerCompanyName = (value: string | null | undefined) => {
+  if (!value) return false
+  return value.trim().length >= 2
+}
+
+const isValidInvoiceIssuerTaxId = (value: string | null | undefined) => {
+  if (!value) return false
+  const normalized = normalizeCustomerDocumentInput(value)
+  const alphanumericLength = normalized.replace(/[^a-zA-Z0-9]/g, '').length
+  return alphanumericLength >= 5
+}
+
+const askGuidedInvoiceIssuerCompanyName = async (chatId: number) => {
+  await TelegramClient.sendMessage({
+    chatId,
+    text: '¿Cuál es el nombre de la empresa para la factura? (obligatorio)',
+  })
+}
+
+const askGuidedInvoiceIssuerTaxId = async (chatId: number) => {
+  await TelegramClient.sendMessage({
+    chatId,
+    text: '¿Cuál es el NIT o cédula de la empresa? (obligatorio)',
+  })
+}
+
+const askGuidedInvoiceIssuerContactPhone = async (chatId: number) => {
+  await TelegramClient.sendMessage({
+    chatId,
+    text: '¿Cuál es el teléfono de contacto de la empresa? (obligatorio)',
+  })
+}
+
+const askGuidedInvoiceIssuerAddress = async (chatId: number) => {
+  await TelegramClient.sendMessage({
+    chatId,
+    text: '¿Cuál es la dirección de la empresa? (obligatorio)',
+  })
+}
+
+const buildGuidedInvoiceIssuerSummary = (data: GuidedInvoiceIssuerData) =>
+  [
+    'Resumen de datos de la empresa:',
+    `Nombre: ${formatOptionalText(data.companyName ?? null)}`,
+    `NIT/Cédula: ${formatOptionalText(data.taxId ?? null)}`,
+    `Contacto: ${formatOptionalText(data.contactPhone ?? null)}`,
+    `Dirección: ${formatOptionalText(data.address ?? null)}`,
+    '',
+    '¿Confirmas guardar estos datos para la factura?',
+  ].join('\n')
+
+const saveInvoiceIssuerSettingsFromInput = async (chatId: number, companyId: string, data: GuidedInvoiceIssuerData): Promise<boolean> => {
+  const companyName = data.companyName?.trim() ?? null
+  if (!isValidInvoiceIssuerCompanyName(companyName)) {
+    await TelegramClient.sendMessage({
+      chatId,
+      text: 'Debes indicar un nombre de empresa válido.',
+    })
+    return false
+  }
+
+  const taxId = data.taxId?.trim() ?? null
+  if (!isValidInvoiceIssuerTaxId(taxId)) {
+    await TelegramClient.sendMessage({
+      chatId,
+      text: 'Debes indicar un NIT/cédula válido (mínimo 5 caracteres).',
+    })
+    return false
+  }
+
+  const contactPhone = data.contactPhone?.trim() ?? null
+  if (!isValidCustomerPhone(contactPhone)) {
+    await TelegramClient.sendMessage({
+      chatId,
+      text: 'Debes indicar un teléfono de contacto válido (mínimo 7 dígitos).',
+    })
+    return false
+  }
+
+  const address = data.address?.trim() ?? null
+  if (!address) {
+    await TelegramClient.sendMessage({
+      chatId,
+      text: 'Debes indicar la dirección de la empresa.',
+    })
+    return false
+  }
+
+  const saved = await invoiceIssuerSettingsRepository.save({
+    companyId,
+    companyName,
+    taxId,
+    contactPhone,
+    address,
+  })
+
+  await TelegramClient.sendMessage({
+    chatId,
+    text: `✅ Datos de empresa guardados para facturas.\nNombre: ${saved.companyName ?? 'sin dato'}\nNIT/Cédula: ${saved.taxId ?? 'sin dato'}\nContacto: ${saved.contactPhone ?? 'sin dato'}\nDirección: ${saved.address ?? 'sin dato'}`,
+  })
+
+  return true
+}
+
+const startGuidedInvoiceIssuer = async (chatId: number, companyId: string) => {
+  const existing = await pendingEventRepository.findLatestPendingByTelegramUserId(chatId, 'invoice_issuer_guided')
+  if (existing && existing.status === 'PENDING_CONFIRMATION') {
+    await pendingEventRepository.updateStatus(existing.id, 'CANCELLED')
+  }
+
+  const current = await invoiceIssuerSettingsRepository.getByCompanyId(companyId)
+  const data: GuidedInvoiceIssuerData = {
+    companyName: current?.companyName ?? null,
+    taxId: current?.taxId ?? null,
+    contactPhone: current?.contactPhone ?? null,
+    address: current?.address ?? null,
+  }
+  const meta: GuidedInvoiceIssuerMetadata = { step: 'companyName' }
+
+  const expiresAt = new Date(Date.now() + PENDING_EXPIRATION_MINUTES * 60 * 1000)
+  await pendingEventRepository.create({
+    companyId,
+    telegramUserId: chatId,
+    eventType: 'invoice_issuer_guided',
+    interpretedData: data as Record<string, unknown>,
+    metadata: meta as Record<string, unknown>,
+    status: 'PENDING_CONFIRMATION',
+    expiresAt,
+  })
+
+  const hasCurrentData = Boolean(current?.companyName || current?.taxId || current?.contactPhone || current?.address)
+  if (hasCurrentData) {
+    await TelegramClient.sendMessage({
+      chatId,
+      text: `Datos actuales de factura:\nNombre: ${formatOptionalText(data.companyName ?? null)}\nNIT/Cédula: ${formatOptionalText(data.taxId ?? null)}\nContacto: ${formatOptionalText(data.contactPhone ?? null)}\nDirección: ${formatOptionalText(data.address ?? null)}\n\nVamos a actualizarlos. Escribe el nuevo nombre de la empresa:`,
+    })
+    return
+  }
+
+  await askGuidedInvoiceIssuerCompanyName(chatId)
+}
+
+const handleGuidedInvoiceIssuerMessage = async (pending: PendingEvent, chatId: number, rawText: string) => {
+  const text = rawText.trim()
+  const normalized = normalizeText(text)
+
+  if (/(^cancelar$)|(^cancel$)|(^salir$)|(^cancelar empresa$)|(^cancelar datos empresa$)/.test(normalized)) {
+    await pendingEventRepository.updateStatus(pending.id, 'CANCELLED')
+    await TelegramClient.sendMessage({ chatId, text: 'Operacion cancelada.' })
+    return true
+  }
+
+  const { data, meta } = getGuidedInvoiceIssuerState(pending)
+
+  if (meta.step === 'companyName') {
+    if (!isValidInvoiceIssuerCompanyName(text)) {
+      await askGuidedInvoiceIssuerCompanyName(chatId)
+      return true
+    }
+
+    data.companyName = text
+    meta.step = 'taxId'
+    await updateGuidedInvoiceIssuerState(pending.id, data, meta)
+    await askGuidedInvoiceIssuerTaxId(chatId)
+    return true
+  }
+
+  if (meta.step === 'taxId') {
+    const taxId = normalizeCustomerDocumentInput(text)
+    if (!isValidInvoiceIssuerTaxId(taxId)) {
+      await TelegramClient.sendMessage({
+        chatId,
+        text: 'El NIT/cédula no parece válido. Escribe al menos 5 caracteres.',
+      })
+      return true
+    }
+
+    data.taxId = taxId
+    meta.step = 'contactPhone'
+    await updateGuidedInvoiceIssuerState(pending.id, data, meta)
+    await askGuidedInvoiceIssuerContactPhone(chatId)
+    return true
+  }
+
+  if (meta.step === 'contactPhone') {
+    const contactPhone = normalizePhoneInput(text)
+    if (!isValidCustomerPhone(contactPhone)) {
+      await TelegramClient.sendMessage({
+        chatId,
+        text: 'El teléfono no parece válido. Escribe el número completo (mínimo 7 dígitos).',
+      })
+      return true
+    }
+
+    data.contactPhone = contactPhone
+    meta.step = 'address'
+    await updateGuidedInvoiceIssuerState(pending.id, data, meta)
+    await askGuidedInvoiceIssuerAddress(chatId)
+    return true
+  }
+
+  if (meta.step === 'address') {
+    if (!text) {
+      await askGuidedInvoiceIssuerAddress(chatId)
+      return true
+    }
+
+    data.address = text
+    meta.step = 'confirm'
+    await updateGuidedInvoiceIssuerState(pending.id, data, meta)
+    await TelegramClient.sendMessage({
+      chatId,
+      text: buildGuidedInvoiceIssuerSummary(data),
+      replyMarkup: buildConfirmCancelKeyboard(),
+    })
+    return true
+  }
+
+  if (meta.step === 'confirm') {
+    if (/^confirmar$|^confirmo$|^si$/.test(normalized)) {
+      const saved = await saveInvoiceIssuerSettingsFromInput(chatId, pending.companyId, data)
+      if (saved) {
+        await pendingEventRepository.updateStatus(pending.id, 'CONFIRMED')
+      }
+      return true
+    }
+
+    if (/^cancelar$|^cancel$|^no$/.test(normalized)) {
+      await pendingEventRepository.updateStatus(pending.id, 'CANCELLED')
+      await TelegramClient.sendMessage({ chatId, text: 'Operacion cancelada.' })
+      return true
+    }
+
+    await TelegramClient.sendMessage({
+      chatId,
+      text: 'Escribe "confirmar" para guardar los datos de empresa o "cancelar".',
+      replyMarkup: buildConfirmCancelKeyboard(),
+    })
+    return true
+  }
+
+  return false
+}
+
+const handleGuidedInvoiceIssuerCallback = async (pending: PendingEvent, chatId: number, action: string) => {
+  if (action === GUIDED_ACTIONS.cancel) {
+    await pendingEventRepository.updateStatus(pending.id, 'CANCELLED')
+    await TelegramClient.sendMessage({ chatId, text: 'Operacion cancelada.' })
+    return true
+  }
+
+  if (action === GUIDED_ACTIONS.confirm) {
+    const { data } = getGuidedInvoiceIssuerState(pending)
+    const saved = await saveInvoiceIssuerSettingsFromInput(chatId, pending.companyId, data)
+    if (saved) {
       await pendingEventRepository.updateStatus(pending.id, 'CONFIRMED')
     }
     return true
@@ -3455,13 +3776,17 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
         ? await arCustomerRepository.findByNormalizedName(pending.companyId, normalizeCustomerName(data.customerName))
         : null
 
+    const companySettings = await invoiceIssuerSettingsRepository.getByCompanyId(pending.companyId)
     const user = await userRepository.findByTelegramId(chatId)
     await startInvoiceSignatureFlow({
       chatId,
       companyId: pending.companyId,
       invoice: {
         companyId: pending.companyId,
-        companyName: null,
+        companyName: companySettings?.companyName ?? null,
+        companyTaxId: companySettings?.taxId ?? null,
+        companyPhone: companySettings?.contactPhone ?? null,
+        companyAddress: companySettings?.address ?? null,
         customerName: data.customerName ?? null,
         customerDocumentNumber: invoiceCustomer?.documentNumber ?? null,
         customerPhone: invoiceCustomer?.phone ?? null,
@@ -3928,12 +4253,19 @@ router.post('/webhook', async (req: Request, res: Response) => {
 
         const pendingCustomer = await pendingEventRepository.findLatestPendingByTelegramUserId(chatId, 'customer_guided')
         const customerState = await ensurePendingState(pendingCustomer)
-        if (!customerState || customerState.status !== 'PENDING_CONFIRMATION') {
-          await TelegramClient.sendMessage({ chatId, text: 'Este evento ya no esta disponible.' })
+        if (customerState && customerState.status === 'PENDING_CONFIRMATION') {
+          await handleGuidedCustomerCallback(customerState.pending, chatId, guidedParsed.action)
           return res.status(200).json({ ok: true })
         }
 
-        await handleGuidedCustomerCallback(customerState.pending, chatId, guidedParsed.action)
+        const pendingInvoiceIssuer = await pendingEventRepository.findLatestPendingByTelegramUserId(chatId, 'invoice_issuer_guided')
+        const invoiceIssuerState = await ensurePendingState(pendingInvoiceIssuer)
+        if (invoiceIssuerState && invoiceIssuerState.status === 'PENDING_CONFIRMATION') {
+          await handleGuidedInvoiceIssuerCallback(invoiceIssuerState.pending, chatId, guidedParsed.action)
+          return res.status(200).json({ ok: true })
+        }
+
+        await TelegramClient.sendMessage({ chatId, text: 'Este evento ya no esta disponible.' })
         return res.status(200).json({ ok: true })
       }
 
@@ -4108,6 +4440,12 @@ router.post('/webhook', async (req: Request, res: Response) => {
         if (handled) return res.status(200).json({ ok: true })
       }
 
+      const guidedInvoiceIssuer = await pendingEventRepository.findLatestPendingByTelegramUserId(chatId, 'invoice_issuer_guided')
+      if (guidedInvoiceIssuer && rawText) {
+        const handled = await handleGuidedInvoiceIssuerMessage(guidedInvoiceIssuer, chatId, rawText)
+        if (handled) return res.status(200).json({ ok: true })
+      }
+
       if (textForCommand && isCustomerLookupCommand(textForCommand)) {
         const user = await userRepository.findByTelegramId(chatId)
         if (!user) {
@@ -4209,6 +4547,20 @@ router.post('/webhook', async (req: Request, res: Response) => {
         }
 
         await startGuidedCustomer(chatId, user.companyId)
+        return res.status(200).json({ ok: true })
+      }
+
+      if (isGuidedInvoiceIssuerCommand(textForCommand)) {
+        const user = await userRepository.findByTelegramId(chatId)
+        if (!user) {
+          await TelegramClient.sendMessage({
+            chatId,
+            text: `No tienes un usuario asignado. Envia este ID a soporte: ${chatId}`,
+          })
+          return res.status(200).json({ ok: true })
+        }
+
+        await startGuidedInvoiceIssuer(chatId, user.companyId)
         return res.status(200).json({ ok: true })
       }
     }

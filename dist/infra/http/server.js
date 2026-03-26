@@ -23,6 +23,7 @@ const accountingPeriod_routes_1 = require("./routes/accountingPeriod.routes");
 const account_routes_1 = require("./routes/account.routes");
 const ar_routes_1 = require("./routes/ar.routes");
 const ap_routes_1 = require("./routes/ap.routes");
+const invoiceSettings_routes_1 = require("./routes/invoiceSettings.routes");
 const inventoryRoutes_1 = require("@inventory/infrastructure/http/routes/inventoryRoutes");
 const ensureIndexes_1 = require("@inventory/infrastructure/db/mongo/indexes/ensureIndexes");
 const app = (0, express_1.default)();
@@ -34,12 +35,13 @@ const allowedOrigins = new Set([
     process.env.FRONTEND_URL ?? '',
     process.env.SIGNATURE_FRONTEND_URL ?? '',
 ].filter(Boolean));
+const isLocalDevOrigin = (origin) => /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
 app.use((0, cors_1.default)({
     origin: (origin, callback) => {
         // Requests sin origin (Postman, Telegram, server-to-server)
         if (!origin)
             return callback(null, true);
-        if (allowedOrigins.has(origin)) {
+        if (allowedOrigins.has(origin) || isLocalDevOrigin(origin)) {
             return callback(null, true);
         }
         return callback(new Error(`CORS bloqueado para el origen: ${origin}`), false);
@@ -66,6 +68,7 @@ app.use('/', payroll_routes_1.payrollRoutes);
 app.use('/', journalEntry_routes_1.journalEntryRoutes);
 app.use('/', ar_routes_1.arRoutes);
 app.use('/', ap_routes_1.apRoutes);
+app.use('/', invoiceSettings_routes_1.invoiceSettingsRoutes);
 app.use('/api/inventory', inventoryRoutes_1.inventoryRoutes);
 (async () => {
     try {

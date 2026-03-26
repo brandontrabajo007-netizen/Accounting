@@ -20,6 +20,7 @@ import { accountingPeriodRoutes } from './routes/accountingPeriod.routes'
 import { accountRoutes } from './routes/account.routes'
 import { arRoutes } from './routes/ar.routes'
 import { apRoutes } from './routes/ap.routes'
+import { invoiceSettingsRoutes } from './routes/invoiceSettings.routes'
 import { inventoryRoutes } from '@inventory/infrastructure/http/routes/inventoryRoutes'
 import { ensureInventoryIndexes } from '@inventory/infrastructure/db/mongo/indexes/ensureIndexes'
 
@@ -36,13 +37,16 @@ const allowedOrigins = new Set(
   ].filter(Boolean),
 )
 
+const isLocalDevOrigin = (origin: string): boolean =>
+  /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)
+
 app.use(
   cors({
     origin: (origin, callback) => {
       // Requests sin origin (Postman, Telegram, server-to-server)
       if (!origin) return callback(null, true)
 
-      if (allowedOrigins.has(origin)) {
+      if (allowedOrigins.has(origin) || isLocalDevOrigin(origin)) {
         return callback(null, true)
       }
 
@@ -72,6 +76,7 @@ app.use('/', payrollRoutes)
 app.use('/', journalEntryRoutes)
 app.use('/', arRoutes)
 app.use('/', apRoutes)
+app.use('/', invoiceSettingsRoutes)
 app.use('/api/inventory', inventoryRoutes)
 
 // --------------------

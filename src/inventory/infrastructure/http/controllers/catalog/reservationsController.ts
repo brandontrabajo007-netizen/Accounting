@@ -57,6 +57,8 @@ export async function confirmReservationHandler(req: Request, res: Response) {
       qty: item.qty,
     })),
     reference: 'reservation-confirm',
+    // The reservation being confirmed already holds stock; do not subtract active reservations again.
+    ignoreActiveReservations: true,
   })
 
   if (!result.ok) {

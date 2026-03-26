@@ -47,7 +47,7 @@ function makeConfirmSale(deps) {
                 return Result_1.Result.err({ type: 'InactiveProductOrVariant', productId: item.productId, variantId: item.variantId });
             }
             const movementsForVariant = await deps.movementRepo.listByProductAndVariant(command.companyId, product.id, variant.id);
-            const reservedActiveQty = deps.reservationRepo
+            const reservedActiveQty = deps.reservationRepo && !command.ignoreActiveReservations
                 ? await deps.reservationRepo.listActiveQtyByVariant(command.companyId, VariantId_1.VariantId.from(item.variantId))
                 : 0;
             const stock = (0, computeAvailableStock_1.computeAvailableStock)(movementsForVariant, reservedActiveQty);

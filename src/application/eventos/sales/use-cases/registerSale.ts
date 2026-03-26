@@ -70,7 +70,7 @@ export const makeRegisterSale = ({
       return new Date()
     })()
     const includesVAT = input.includesVAT ?? false
-    const includesCost = input.includesCost ?? false
+    const includesCost = (input.includesCost ?? false) || (input.quantity ?? 0) > 0 && (input.unitCost ?? 0) > 0
     const periodId = await resolvePeriodId.resolve(input.companyId, {
       periodId: input.periodId,
       date,

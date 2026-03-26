@@ -42,7 +42,7 @@ router.post('/login', async (req, res) => {
             maxAge: 1000 * 60 * 60 * 12,
         });
         const { password: _omit, ...safeUser } = user;
-        return res.json({ user: safeUser });
+        return res.json({ status: true, token, user: safeUser });
     }
     catch (err) {
         console.error('Error en login:', err);
