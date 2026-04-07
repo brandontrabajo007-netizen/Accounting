@@ -76,6 +76,50 @@ const parseSpanishDate = (raw) => {
     const date = new Date(Date.UTC(year, month, day));
     return Number.isNaN(date.getTime()) ? null : date;
 };
+const toPositiveInt = (value) => {
+    const raw = typeof value === 'number' ? value : typeof value === 'string' ? Number(value.trim()) : NaN;
+    if (!Number.isFinite(raw))
+        return null;
+    const rounded = Math.round(raw);
+    return rounded > 0 ? rounded : null;
+};
+const extractExplicitSaleQuantity = (rawText) => {
+    const patterns = [
+        /(?:^|\b)venta(?:s)?\s+de\s+(\d{1,6})(?:\b|$)/i,
+        /(?:^|\b)vend(?:i|í|imos|ieron|io|ió)\s+(\d{1,6})(?:\b|$)/i,
+        /(?:^|\b)se\s+vend(?:io|ió|ieron)\s+(\d{1,6})(?:\b|$)/i,
+        /^\s*(\d{1,6})(?=\s+[^\d])/i,
+    ];
+    for (const pattern of patterns) {
+        const match = rawText.match(pattern);
+        const qty = toPositiveInt(match?.[1]);
+        if (qty)
+            return qty;
+    }
+    return null;
+};
+const extractPackSizeHint = (rawText) => {
+    const packMatch = rawText.match(/(?:^|[\s(])x\s*(\d{1,3})(?=\b|[^\d])/i);
+    const packSize = toPositiveInt(packMatch?.[1]);
+    if (packSize && packSize > 1)
+        return packSize;
+    if (/\bdocenas?\b/i.test(rawText))
+        return 12;
+    return null;
+};
+const normalizeParsedSaleQuantity = (rawText, parsedQty) => {
+    const explicitQty = extractExplicitSaleQuantity(rawText);
+    const normalizedParsedQty = toPositiveInt(parsedQty);
+    if (!normalizedParsedQty)
+        return explicitQty ?? undefined;
+    const packSize = extractPackSizeHint(rawText);
+    if (!explicitQty || !packSize)
+        return normalizedParsedQty;
+    if (normalizedParsedQty === explicitQty * packSize) {
+        return explicitQty;
+    }
+    return normalizedParsedQty;
+};
 exports.TelegramAdapter = {
     async getMessageText(message) {
         if (!message)
@@ -183,6 +227,13 @@ exports.TelegramAdapter = {
         const sale = await (0, aiSaleParser_1.aiParseSale)(text);
         if (!sale)
             return null;
+        const normalizedQty = normalizeParsedSaleQuantity(text, sale.quantity);
+        if (typeof normalizedQty === 'number') {
+            sale.quantity = normalizedQty;
+            if (typeof sale.description === 'string') {
+                sale.description = sale.description.replace(/^(\s*venta\s+de\s+)\d+\b/i, `$1${normalizedQty}`);
+            }
+        }
         applyCurrentYearIfMissing(text, sale);
         sale.companyId = user.companyId;
         return { chatId, saleInput: sale };

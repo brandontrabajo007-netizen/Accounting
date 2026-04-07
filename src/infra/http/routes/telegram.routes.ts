@@ -973,6 +973,26 @@ const parseNonNegativeQuantity = (value: string): number | null => {
   return Number.isInteger(qty) && qty >= 0 ? qty : null
 }
 
+const parseExplicitSaleQty = (value: string): number | null => {
+  const patterns = [
+    /(?:^|\b)venta(?:s)?\s+de\s+(\d{1,6})(?:\b|$)/i,
+    /(?:^|\b)vend(?:i|í|imos|ieron|io|ió)\s+(\d{1,6})(?:\b|$)/i,
+    /(?:^|\b)se\s+vend(?:io|ió|ieron)\s+(\d{1,6})(?:\b|$)/i,
+    /^\s*(\d{1,6})(?=\s+[^\d])/i,
+  ]
+
+  for (const pattern of patterns) {
+    const match = value.match(pattern)
+    if (!match) continue
+    const qty = Number(match[1])
+    if (Number.isInteger(qty) && qty > 0) return qty
+  }
+
+  return null
+}
+
+const hasPackHintInSaleText = (value: string) => /(?:^|[\s(])x\s*\d{1,3}(?=\b|[^\d])/i.test(value) || /\bdocenas?\b/i.test(value)
+
 const parseGuidedVariantPriceInput = (value: string): number | null => {
   const explicitMatch = value.match(/(?:=|:)\s*([\d.,]+)/)
   if (explicitMatch) {
@@ -1702,7 +1722,7 @@ const askGuidedSaleVariantQuantityStep = async (
     chatId,
     text:
       `🧵 *${productName}*\n` +
-      `📌 Talla actual: *${current.attribute} ${current.value}*\n` +
+      `📌 Variante actual: *${current.attribute} ${current.value}*\n` +
       `📍 Progreso: ${progress}${totalLine}\n\n` +
       `✍️ Escribe solo la cantidad para *${current.attribute} ${current.value}*.\n` +
       'Ejemplo: `0`, `3`, `10`',
@@ -1732,7 +1752,7 @@ const askGuidedSaleVariants = async (chatId: number, productName: string, varian
     chatId,
     text:
       `📦 *Variantes de ${productName}*\n\n` +
-      `Estas son las tallas disponibles:\n${list}${totalLine}\n\n` +
+      `Estas son las variantes disponibles:\n${list}${totalLine}\n\n` +
       '✅ Para evitar errores, te las pediré una por una.',
     parseMode: 'Markdown',
   })
@@ -1778,7 +1798,7 @@ const askGuidedSaleVariantPrices = async (chatId: number, productName: string, v
     chatId,
     text:
       `💵 *Precios por variante de ${productName}*\n\n` +
-      `Estas son las tallas disponibles:\n${list}\n\n` +
+      `Estas son las variantes disponibles:\n${list}\n\n` +
       '✅ Te los voy a pedir uno por uno para evitar errores.',
     parseMode: 'Markdown',
   })
@@ -3263,6 +3283,10 @@ const startFastSaleFromText = async (chatId: number, companyId: string, rawText:
     return false
   }
 
+  const sourceText = cleanedText || rawText
+  const explicitSaleQty = parseExplicitSaleQty(sourceText)
+  const hasPackHint = hasPackHintInSaleText(sourceText)
+
   const data: GuidedSaleData = {
     saleId: inventoryGateway.idGenerator(),
     customerName: parsed.customerName,
@@ -3374,6 +3398,14 @@ const startFastSaleFromText = async (chatId: number, companyId: string, rawText:
       }
 
       const expiresAt = new Date(Date.now() + PENDING_EXPIRATION_MINUTES * 60 * 1000)
+      const effectivePendingTotalQty =
+        parsed.items.length === 1 && explicitSaleQty && hasPackHint
+          ? explicitSaleQty
+          : pendingTotalQty > 0
+            ? pendingTotalQty
+            : parsed.items.length === 1 && explicitSaleQty
+              ? explicitSaleQty
+              : null
       const meta: GuidedSaleMetadata = {
         step: 'variants',
         currentProductId: product.id.toString(),
@@ -3385,13 +3417,13 @@ const startFastSaleFromText = async (chatId: number, companyId: string, rawText:
         })),
         variantWizardIndex: 0,
         variantWizardValues: activeVariants.map(() => 0),
-        pendingTotalQty: pendingTotalQty > 0 ? pendingTotalQty : null,
+        pendingTotalQty: effectivePendingTotalQty,
         pendingPriceAmount,
         pendingPriceScope,
         autoPriceApply: pendingPriceAmount ? true : undefined,
       }
 
-      await pendingEventRepository.create({
+      const created = await pendingEventRepository.create({
         companyId,
         telegramUserId: chatId,
         eventType: 'sale_guided',
@@ -3404,6 +3436,25 @@ const startFastSaleFromText = async (chatId: number, companyId: string, rawText:
       if (!meta.candidateVariants || meta.candidateVariants.length === 0) {
         await TelegramClient.sendMessage({ chatId, text: 'No pude cargar las variantes para este producto.' })
         return true
+      }
+
+      const autoQty = meta.pendingTotalQty && meta.pendingTotalQty > 0 ? Math.round(meta.pendingTotalQty) : 0
+      if (meta.candidateVariants.length === 1 && autoQty > 0) {
+        const only = meta.candidateVariants[0]
+        const variantLabel = `${only.attribute} ${only.value}`.trim()
+        await TelegramClient.sendMessage({
+          chatId,
+          text: `Detecte una sola variante (${variantLabel}) y asigne automaticamente la cantidad ${autoQty}.`,
+        })
+        return await applyGuidedVariantSelection(created.id, chatId, data, meta, [
+          {
+            variantId: only.id,
+            attribute: only.attribute,
+            value: only.value,
+            qty: autoQty,
+            unitPrice: null,
+          },
+        ])
       }
 
       await askGuidedSaleVariants(chatId, product.name, meta.candidateVariants, meta.pendingTotalQty ?? null)
@@ -3747,7 +3798,7 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
         if (meta.pendingTotalQty && meta.pendingTotalQty > 0 && totalAssigned !== meta.pendingTotalQty) {
           await TelegramClient.sendMessage({
             chatId,
-            text: `Aviso: la suma por tallas fue ${totalAssigned} y la cantidad detectada era ${meta.pendingTotalQty}. Continuare con ${totalAssigned}.`,
+            text: `Aviso: la suma por variantes fue ${totalAssigned} y la cantidad detectada era ${meta.pendingTotalQty}. Continuare con ${totalAssigned}.`,
           })
         }
 
@@ -3764,7 +3815,7 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
         if (capturedVariants.length === 0) {
           await TelegramClient.sendMessage({
             chatId,
-            text: 'Todas las tallas quedaron en 0. Ingresa al menos una cantidad mayor a 0.',
+            text: 'Todas las variantes quedaron en 0. Ingresa al menos una cantidad mayor a 0.',
           })
           resetGuidedVariantWizard(meta, totalVariants)
           await updateGuidedSaleState(pending.id, data, meta)
@@ -3862,7 +3913,7 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
     if (meta.pendingTotalQty && meta.pendingTotalQty > 0 && parsedTotal !== meta.pendingTotalQty) {
       await TelegramClient.sendMessage({
         chatId,
-        text: `La suma por tallas fue ${parsedTotal} y debe ser ${meta.pendingTotalQty}. Corrige las cantidades y envíalas de nuevo.`,
+        text: `La suma por variantes fue ${parsedTotal} y debe ser ${meta.pendingTotalQty}. Corrige las cantidades y envíalas de nuevo.`,
       })
       return true
     }
@@ -4225,7 +4276,7 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
       if (missing.length > 0) {
         resetGuidedPriceVariantWizard(meta, candidateVariants, targetItem)
         await updateGuidedSaleState(pending.id, data, meta)
-        await TelegramClient.sendMessage({ chatId, text: 'Faltan algunos precios. Continuemos talla por talla.' })
+        await TelegramClient.sendMessage({ chatId, text: 'Faltan algunos precios. Continuemos variante por variante.' })
         if (meta.currentProductName) {
           await askGuidedSaleVariantPriceStep(
             chatId,

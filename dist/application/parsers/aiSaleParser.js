@@ -55,6 +55,8 @@ REGLAS:
 4) periodHint: "YYYY-MM" cuando solo mencionan mes/ano; si no, null.
 5) IVA: "incluye iva" -> true; "no incluye iva" -> false; si no se menciona -> false.
 6) quantity: primer numero que indique unidades ("10 pantalones"). Si no hay -> null.
+   - IMPORTANTE: si el nombre del producto contiene patrones como "x12", "x6", "x24", "paq x12", NO multipliques quantity por ese valor.
+   - Ejemplo: "venta de 10 pantalonetas x12" -> quantity = 10.
 7) Producto: palabras tras la cantidad hasta "a", "por", "total", "me cuesta", "cuesta".
    - Si no hay quantity o producto -> description = null.
    - Si hay ambos -> "Venta de {quantity} {producto}".

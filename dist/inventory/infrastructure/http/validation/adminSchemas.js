@@ -2,6 +2,13 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerAdjustmentSchema = exports.registerReceiptSchema = exports.listMovementsQuerySchema = exports.stockQuerySchema = exports.updateVariantSchema = exports.createVariantSchema = exports.updateProductSchema = exports.createProductSchema = exports.listProductsQuerySchema = exports.paginationSchema = void 0;
 const zod_1 = require("zod");
+const dateOnlyPattern = /^\d{4}-\d{2}-\d{2}$/;
+const dateFilterSchema = zod_1.z.string().trim().refine((value) => {
+    if (dateOnlyPattern.test(value)) {
+        return !Number.isNaN(new Date(`${value}T00:00:00.000Z`).getTime());
+    }
+    return !Number.isNaN(new Date(value).getTime());
+}, 'Use YYYY-MM-DD or ISO datetime');
 exports.paginationSchema = zod_1.z.object({
     page: zod_1.z.coerce.number().int().min(1).default(1),
     pageSize: zod_1.z.coerce.number().int().min(1).max(200).default(20),
@@ -46,8 +53,8 @@ exports.listMovementsQuerySchema = zod_1.z
     productId: zod_1.z.string().min(1).optional(),
     variantId: zod_1.z.string().min(1).optional(),
     type: zod_1.z.enum(['IN', 'OUT', 'ADJUST']).optional(),
-    from: zod_1.z.string().datetime().optional(),
-    to: zod_1.z.string().datetime().optional(),
+    from: dateFilterSchema.optional(),
+    to: dateFilterSchema.optional(),
 })
     .merge(exports.paginationSchema);
 exports.registerReceiptSchema = zod_1.z.object({

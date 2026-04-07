@@ -57,6 +57,10 @@ REGLAS:
    - Si el mensaje dice "cada uno", "unitario", "c/u" -> unitPrice.
    - Si dice "total" o "en total" -> totalPrice.
    - Si no se menciona precio, deja ambos null.
+4.1) Cantidades:
+   - La cantidad vendida es la que el usuario declara explícitamente (ej: "venta de 10 ...", "vendí 10 ...").
+   - NO uses números dentro del nombre del producto como cantidad.
+   - Ejemplo: "pantalonetas AAA x12" -> "x12" es parte del producto/empaque, no la cantidad vendida.
 5) Variantes:
    - "talla 28" -> attribute="talla", value="28".
    - Si no se indica variante, usa attribute=null y value="__unspecified__".

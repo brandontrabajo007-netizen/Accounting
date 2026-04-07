@@ -31,6 +31,33 @@ class MongoPendingEventRepository {
         const doc = await pendingEvent_model_1.PendingEventMongoModel.findById(id).lean();
         return doc ? toDomain(doc) : null;
     }
+    async listByCompany(params) {
+        const page = Number.isFinite(params.page) && params.page > 0 ? Math.floor(params.page) : 1;
+        const limit = Number.isFinite(params.limit) && params.limit > 0 ? Math.floor(params.limit) : 100;
+        const skip = (page - 1) * limit;
+        const query = { companyId: params.companyId };
+        if (params.eventType)
+            query.eventType = params.eventType;
+        if (params.statuses && params.statuses.length > 0) {
+            query.status = { $in: params.statuses };
+        }
+        if (params.from || params.to) {
+            const createdAt = {};
+            if (params.from)
+                createdAt.$gte = params.from;
+            if (params.to)
+                createdAt.$lte = params.to;
+            query.createdAt = createdAt;
+        }
+        const [docs, total] = await Promise.all([
+            pendingEvent_model_1.PendingEventMongoModel.find(query).sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit).lean(),
+            pendingEvent_model_1.PendingEventMongoModel.countDocuments(query),
+        ]);
+        return {
+            items: docs.map((doc) => toDomain(doc)),
+            total,
+        };
+    }
     async findLatestPendingByTelegramUserId(telegramUserId, eventType) {
         const query = {
             telegramUserId,

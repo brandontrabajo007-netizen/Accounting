@@ -1,6 +1,10 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MongoLedgerMovementRepository = void 0;
+const mongoose_1 = __importDefault(require("mongoose"));
 const LedgerMovementModel_1 = require("../models/LedgerMovementModel");
 const toDomain = (doc) => ({
     id: doc._id.toString(),
@@ -30,6 +34,13 @@ const buildFilter = ({ companyId, accountCode, periodId, from, to }) => {
 };
 const emptyTotals = { debit: 0, credit: 0 };
 class MongoLedgerMovementRepository {
+    async aggregateTotals(filter) {
+        const [agg] = await LedgerMovementModel_1.LedgerMovementMongoModel.aggregate([
+            { $match: filter },
+            { $group: { _id: null, debit: { $sum: '$debit' }, credit: { $sum: '$credit' } } },
+        ]);
+        return agg ? { debit: agg.debit ?? 0, credit: agg.credit ?? 0 } : emptyTotals;
+    }
     async findByAccount(params) {
         const { page, limit } = params;
         const skip = (page - 1) * limit;
@@ -53,11 +64,24 @@ class MongoLedgerMovementRepository {
         const { companyId, accountCode, periodId, before } = params;
         const filter = buildFilter({ companyId, accountCode, periodId });
         filter.date = { $lt: before };
-        const [agg] = await LedgerMovementModel_1.LedgerMovementMongoModel.aggregate([
-            { $match: filter },
-            { $group: { _id: null, debit: { $sum: '$debit' }, credit: { $sum: '$credit' } } },
-        ]);
-        return agg ? { debit: agg.debit ?? 0, credit: agg.credit ?? 0 } : emptyTotals;
+        return this.aggregateTotals(filter);
+    }
+    async sumBeforeCursor(params) {
+        const filter = buildFilter(params);
+        const { date, createdAt, id } = params.cursor;
+        const cursorFilter = [
+            { date: { $lt: date } },
+            { date, createdAt: { $lt: createdAt } },
+        ];
+        if (mongoose_1.default.Types.ObjectId.isValid(id)) {
+            cursorFilter.push({
+                date,
+                createdAt,
+                _id: { $lt: new mongoose_1.default.Types.ObjectId(id) },
+            });
+        }
+        filter.$or = cursorFilter;
+        return this.aggregateTotals(filter);
     }
 }
 exports.MongoLedgerMovementRepository = MongoLedgerMovementRepository;

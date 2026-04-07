@@ -19,6 +19,7 @@ const registerSupplierPayment_1 = require("@application/eventos/supplier-payment
 const aiSaleItemsParser_1 = require("@application/parsers/aiSaleItemsParser");
 const generateIncomeStatement_1 = require("@application/reports/use-cases/generateIncomeStatement");
 const AccountingPeriodStatus_1 = require("@domain/accounting-periods/AccountingPeriodStatus");
+const EventType_enum_1 = require("@domain/events/EventType.enum");
 const invoicePdfGenerator_1 = require("@infra/pdf/invoicePdfGenerator");
 const telegramAdapter_1 = require("@infra/telegram/telegramAdapter");
 const telegramClient_1 = require("@infra/telegram/telegramClient");
@@ -183,6 +184,210 @@ const formatCurrency = (value) => value.toLocaleString('es-CO', {
     currency: 'COP',
     maximumFractionDigits: 0,
 });
+const bogotaDateFormatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Bogota',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+});
+const getBogotaTodayRange = () => {
+    const today = bogotaDateFormatter.format(new Date());
+    return { start: today, end: today };
+};
+const toDateString = (date) => date.toISOString().slice(0, 10);
+const getBogotaTodayUtc = () => {
+    const parts = bogotaDateFormatter.format(new Date()).split('-').map(Number);
+    return new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+};
+const getBogotaCurrentWeekRange = () => {
+    const today = getBogotaTodayUtc();
+    const day = today.getUTCDay() === 0 ? 7 : today.getUTCDay();
+    const start = new Date(today);
+    start.setUTCDate(today.getUTCDate() - (day - 1));
+    return { start: toDateString(start), end: toDateString(today) };
+};
+const getBogotaCurrentMonthRange = () => {
+    const today = getBogotaTodayUtc();
+    const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+    const end = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0));
+    return { start: toDateString(start), end: toDateString(end) };
+};
+const getBogotaCurrentYearRange = () => {
+    const year = getBogotaTodayUtc().getUTCFullYear();
+    const start = new Date(Date.UTC(year, 0, 1));
+    const end = new Date(Date.UTC(year, 11, 31));
+    return { start: toDateString(start), end: toDateString(end) };
+};
+const parseSalesMetricsPeriod = (value) => {
+    const parsed = telegramAdapter_1.TelegramAdapter.parseIncomeStatementPeriod(value);
+    if (parsed)
+        return parsed;
+    const normalized = normalizeText(value);
+    if (/\b(esta semana|semana actual|semanal)\b/.test(normalized))
+        return getBogotaCurrentWeekRange();
+    if (/\b(este mes|mes actual|mensual)\b/.test(normalized))
+        return getBogotaCurrentMonthRange();
+    if (/\b(este ano|este año|ano actual|año actual|anual)\b/.test(normalized))
+        return getBogotaCurrentYearRange();
+    return getBogotaTodayRange();
+};
+const isSalesMetricsQuery = (value) => {
+    const normalized = normalizeText(value);
+    const asksSales = /\b(vendi|vender|ventas?|vendido|facture|facturacion)\b/.test(normalized);
+    const asksMetric = /\b(cuanto|cuantos|cual|que|dime|muestrame|muestreme|resumen|reporte|informe|top|unidades|cantidad|dinero|plata|monto|valor|producto)\b/.test(normalized);
+    const asksPeriod = /\b(hoy|semana|semanal|mes|mensual|ano|año|anual)\b/.test(normalized);
+    const isPotentialSaleRegistration = /\b(vendi|venta)\b/.test(normalized) && /\d/.test(normalized) && /\b(a|por|cada)\b/.test(normalized);
+    return asksSales && (asksMetric || asksPeriod) && !isPotentialSaleRegistration;
+};
+const toBogotaUtcRange = (period) => ({
+    from: new Date(`${period.start}T00:00:00.000-05:00`),
+    to: new Date(`${period.end}T23:59:59.999-05:00`),
+});
+const toJournalSearchRange = (period) => ({
+    from: new Date(`${period.start}T00:00:00.000Z`),
+    to: new Date(`${period.end}T23:59:59.999-05:00`),
+});
+const dayInPeriod = (day, period) => day >= period.start && day <= period.end;
+const isMidnightUtc = (value) => value.getUTCHours() === 0 &&
+    value.getUTCMinutes() === 0 &&
+    value.getUTCSeconds() === 0 &&
+    value.getUTCMilliseconds() === 0;
+const isJournalDateWithinPeriod = (value, period) => {
+    if (Number.isNaN(value.getTime()))
+        return false;
+    if (isMidnightUtc(value)) {
+        const utcDay = value.toISOString().slice(0, 10);
+        return dayInPeriod(utcDay, period);
+    }
+    const bogotaDay = bogotaDateFormatter.format(value);
+    return dayInPeriod(bogotaDay, period);
+};
+const parseMovementType = (value) => normalizeText(String(value ?? ''));
+const parseMovementGroup = (value) => String(value ?? '').toUpperCase();
+const getSaleAmountFromJournalEntry = (entry) => {
+    const revenueDebit = entry.movements
+        .filter((movement) => parseMovementType(movement.type) === 'debit' && parseMovementGroup(movement.group) === 'REVENUE')
+        .reduce((sum, movement) => sum + (Number.isFinite(movement.amount) ? movement.amount : 0), 0);
+    if (revenueDebit > 0)
+        return revenueDebit;
+    const revenueCredit = entry.movements
+        .filter((movement) => parseMovementType(movement.type) === 'credit' && parseMovementGroup(movement.group) === 'REVENUE')
+        .reduce((sum, movement) => sum + (Number.isFinite(movement.amount) ? movement.amount : 0), 0);
+    if (revenueCredit > 0)
+        return revenueCredit;
+    const eventType = normalizeText(String(entry.eventType ?? ''));
+    const description = normalizeText(String(entry.description ?? ''));
+    const looksLikeSale = eventType === EventType_enum_1.EventType.SALE || /\bventa\b/.test(description);
+    if (!looksLikeSale)
+        return 0;
+    const debitAmounts = entry.movements
+        .filter((movement) => parseMovementType(movement.type) === 'debit' && Number.isFinite(movement.amount) && movement.amount > 0)
+        .map((movement) => movement.amount);
+    if (debitAmounts.length === 0)
+        return 0;
+    return Math.max(...debitAmounts);
+};
+const getSalesMetricsSummary = async (companyId, period) => {
+    const inventoryRange = toBogotaUtcRange(period);
+    const journalRange = toJournalSearchRange(period);
+    const productQtyMap = new Map();
+    let totalUnits = 0;
+    let page = 1;
+    const pageSize = 500;
+    let totalMovements = 0;
+    while (true) {
+        const movementPage = await dependencies_1.inventoryGateway.listMovements({
+            companyId,
+            type: 'OUT',
+            from: inventoryRange.from,
+            to: inventoryRange.to,
+            page,
+            pageSize,
+        });
+        totalMovements = movementPage.total;
+        for (const movement of movementPage.items) {
+            if (movement.type !== 'OUT')
+                continue;
+            if (movement.reference.type !== 'SALE')
+                continue;
+            const qty = Number(movement.qty ?? 0);
+            if (!Number.isFinite(qty) || qty <= 0)
+                continue;
+            totalUnits += qty;
+            const productId = String(movement.productId);
+            productQtyMap.set(productId, (productQtyMap.get(productId) ?? 0) + qty);
+        }
+        if (movementPage.items.length === 0 || page * pageSize >= totalMovements)
+            break;
+        page += 1;
+    }
+    let topProductId = null;
+    let topProductQty = 0;
+    for (const [productId, qty] of productQtyMap) {
+        if (qty > topProductQty) {
+            topProductId = productId;
+            topProductQty = qty;
+        }
+    }
+    let topProductName = null;
+    if (topProductId) {
+        const topProduct = await dependencies_1.inventoryGateway.getProductById(companyId, topProductId);
+        topProductName = topProduct?.name ?? null;
+    }
+    let totalSalesMoneyFromJournal = 0;
+    let journalPage = 1;
+    const journalLimit = 200;
+    let totalJournalPages = 1;
+    do {
+        const pageResult = await dependencies_1.journalEntryRepository.findPaginated({
+            companyId,
+            page: journalPage,
+            limit: journalLimit,
+            from: journalRange.from,
+            to: journalRange.to,
+        });
+        for (const entry of pageResult.docs) {
+            if (!isJournalDateWithinPeriod(entry.date, period))
+                continue;
+            const saleAmount = getSaleAmountFromJournalEntry(entry);
+            totalSalesMoneyFromJournal += saleAmount;
+        }
+        totalJournalPages = Math.max(1, pageResult.totalPages);
+        journalPage += 1;
+    } while (journalPage <= totalJournalPages);
+    let totalSalesMoneyFromInvoices = 0;
+    let invoicePage = 1;
+    const invoiceLimit = 200;
+    let totalInvoiceRecords = 0;
+    while (true) {
+        const invoicePageResult = await dependencies_1.pendingEventRepository.listByCompany({
+            companyId,
+            eventType: 'invoice_signature',
+            from: inventoryRange.from,
+            to: inventoryRange.to,
+            page: invoicePage,
+            limit: invoiceLimit,
+        });
+        totalInvoiceRecords = invoicePageResult.total;
+        for (const event of invoicePageResult.items) {
+            const invoiceData = event.interpretedData;
+            const amount = Number(invoiceData.totalAmount ?? 0);
+            if (!Number.isFinite(amount) || amount <= 0)
+                continue;
+            totalSalesMoneyFromInvoices += amount;
+        }
+        if (invoicePageResult.items.length === 0 || invoicePage * invoiceLimit >= totalInvoiceRecords)
+            break;
+        invoicePage += 1;
+    }
+    const totalSalesMoney = totalSalesMoneyFromInvoices > 0 ? totalSalesMoneyFromInvoices : totalSalesMoneyFromJournal;
+    return {
+        totalUnits,
+        topProductName: topProductName ?? topProductId,
+        topProductQty,
+        totalSalesMoney: Math.round(totalSalesMoney),
+    };
+};
 const normalizeBaseUrl = (value) => {
     if (!value)
         return null;
@@ -269,6 +474,13 @@ const GUIDED_ACTIONS = {
     unit: 'u',
     total: 't',
 };
+const GUIDED_VARIANT_ACTIONS = {
+    qtyPrefix: 'vq_',
+    manual: 'vqm',
+    fillZeros: 'vqz',
+};
+const VARIANT_QTY_MANUAL_INPUT_TOKEN = '__variant_manual__';
+const VARIANT_QTY_FILL_ZERO_TOKEN = '__variant_fill_zero__';
 const buildCallbackData = (pendingId, action, entityId) => [CALLBACK_PREFIX, pendingId, action, entityId].filter(Boolean).join('|');
 const parseCallbackData = (data) => {
     if (!data)
@@ -279,6 +491,16 @@ const parseCallbackData = (data) => {
     return { pendingId, action, entityId };
 };
 const buildGuidedCallbackData = (action) => [GUIDED_CALLBACK_PREFIX, action].filter(Boolean).join('|');
+const buildGuidedVariantQtyAction = (qty) => `${GUIDED_VARIANT_ACTIONS.qtyPrefix}${qty}`;
+const parseGuidedVariantQtyAction = (action) => {
+    if (!action.startsWith(GUIDED_VARIANT_ACTIONS.qtyPrefix))
+        return null;
+    const raw = action.slice(GUIDED_VARIANT_ACTIONS.qtyPrefix.length);
+    if (!/^\d+$/.test(raw))
+        return null;
+    const qty = Number(raw);
+    return Number.isInteger(qty) && qty >= 0 ? qty : null;
+};
 const parseGuidedCallbackData = (data) => {
     if (!data)
         return null;
@@ -286,6 +508,28 @@ const parseGuidedCallbackData = (data) => {
     if (prefix !== GUIDED_CALLBACK_PREFIX || !action)
         return null;
     return { action };
+};
+const mapGuidedSaleCallbackActionToText = (action) => {
+    if (action === GUIDED_ACTIONS.yes)
+        return 'si';
+    if (action === GUIDED_ACTIONS.no)
+        return 'no';
+    if (action === GUIDED_ACTIONS.confirm)
+        return 'confirmar';
+    if (action === GUIDED_ACTIONS.cancel)
+        return 'cancelar';
+    if (action === GUIDED_ACTIONS.unit)
+        return 'unitario';
+    if (action === GUIDED_ACTIONS.total)
+        return 'total';
+    if (action === GUIDED_VARIANT_ACTIONS.manual)
+        return VARIANT_QTY_MANUAL_INPUT_TOKEN;
+    if (action === GUIDED_VARIANT_ACTIONS.fillZeros)
+        return VARIANT_QTY_FILL_ZERO_TOKEN;
+    const quickQty = parseGuidedVariantQtyAction(action);
+    if (quickQty !== null)
+        return String(quickQty);
+    return '';
 };
 const buildSignCallbackData = (pendingId, action) => [SIGN_CALLBACK_PREFIX, pendingId, action].join('|');
 const parseSignCallbackData = (data) => {
@@ -322,6 +566,25 @@ const buildConfirmCancelKeyboard = () => ({
         ],
     ],
 });
+const buildGuidedVariantQtyKeyboard = (remaining, hasMoreVariants) => {
+    const rows = [
+        [0, 5, 10, 20].map((qty) => ({ text: String(qty), callback_data: buildGuidedCallbackData(buildGuidedVariantQtyAction(qty)) })),
+    ];
+    const actionsRow = [];
+    if (remaining !== null && remaining > 0) {
+        actionsRow.push({
+            text: `Restante (${remaining})`,
+            callback_data: buildGuidedCallbackData(buildGuidedVariantQtyAction(remaining)),
+        });
+    }
+    actionsRow.push({ text: 'Otro valor', callback_data: buildGuidedCallbackData(GUIDED_VARIANT_ACTIONS.manual) });
+    rows.push(actionsRow);
+    if (hasMoreVariants) {
+        rows.push([{ text: '0 al resto', callback_data: buildGuidedCallbackData(GUIDED_VARIANT_ACTIONS.fillZeros) }]);
+    }
+    rows.push([{ text: 'Cancelar', callback_data: buildGuidedCallbackData(GUIDED_ACTIONS.cancel) }]);
+    return { inline_keyboard: rows };
+};
 const formatOptionalText = (value) => (value?.trim() ? value.trim() : 'sin dato');
 const formatOptionalCurrency = (value) => (Number.isFinite(value) ? formatCurrency(value) : 'sin dato');
 const formatOptionalDate = (value) => (value ? formatDate(value) : 'sin fecha');
@@ -473,6 +736,44 @@ const parseSingleQuantity = (value) => {
     const qty = Number(match[0]);
     return Number.isFinite(qty) && qty > 0 ? qty : null;
 };
+const parseNonNegativeQuantity = (value) => {
+    const cleaned = value.trim();
+    if (!/^\d+$/.test(cleaned))
+        return null;
+    const qty = Number(cleaned);
+    return Number.isInteger(qty) && qty >= 0 ? qty : null;
+};
+const parseExplicitSaleQty = (value) => {
+    const patterns = [
+        /(?:^|\b)venta(?:s)?\s+de\s+(\d{1,6})(?:\b|$)/i,
+        /(?:^|\b)vend(?:i|í|imos|ieron|io|ió)\s+(\d{1,6})(?:\b|$)/i,
+        /(?:^|\b)se\s+vend(?:io|ió|ieron)\s+(\d{1,6})(?:\b|$)/i,
+        /^\s*(\d{1,6})(?=\s+[^\d])/i,
+    ];
+    for (const pattern of patterns) {
+        const match = value.match(pattern);
+        if (!match)
+            continue;
+        const qty = Number(match[1]);
+        if (Number.isInteger(qty) && qty > 0)
+            return qty;
+    }
+    return null;
+};
+const hasPackHintInSaleText = (value) => /(?:^|[\s(])x\s*\d{1,3}(?=\b|[^\d])/i.test(value) || /\bdocenas?\b/i.test(value);
+const parseGuidedVariantPriceInput = (value) => {
+    const explicitMatch = value.match(/(?:=|:)\s*([\d.,]+)/);
+    if (explicitMatch) {
+        const explicit = parseMoney(explicitMatch[1]);
+        if (explicit && explicit > 0)
+            return explicit;
+    }
+    const largest = extractLargestMoney(value);
+    if (largest && largest > 0)
+        return largest;
+    const fallback = parseMoney(value);
+    return fallback && fallback > 0 ? fallback : null;
+};
 const parseYesNo = (value) => {
     const text = normalizeText(value);
     const tokens = text.split(/[\s,.;:!?]+/).filter(Boolean);
@@ -506,6 +807,74 @@ const parseDateInput = (value) => {
         return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
     }
     return null;
+};
+const parseCreditDueTerm = (value) => {
+    const text = normalizeText(value);
+    if (!text)
+        return null;
+    if (/\bquincena\b/.test(text)) {
+        return { amount: 15, unit: 'days' };
+    }
+    if (/^\d+$/.test(text)) {
+        const amount = Number(text);
+        return Number.isInteger(amount) && amount > 0 ? { amount, unit: 'days' } : null;
+    }
+    if (/\buna?\s+semana\b/.test(text)) {
+        return { amount: 1, unit: 'weeks' };
+    }
+    if (/\buna?\s+mes\b/.test(text)) {
+        return { amount: 1, unit: 'months' };
+    }
+    const compact = text.match(/\b(\d+)\s*(d|dias?|dia|semanas?|semana|sem|s|meses|mes|m)\b/);
+    if (!compact)
+        return null;
+    const amount = Number(compact[1]);
+    if (!Number.isInteger(amount) || amount <= 0)
+        return null;
+    const rawUnit = compact[2];
+    if (/^m(?:es|eses)?$/.test(rawUnit)) {
+        return { amount, unit: 'months' };
+    }
+    if (/^(?:sem|s|semana|semanas)$/.test(rawUnit)) {
+        return { amount, unit: 'weeks' };
+    }
+    return { amount, unit: 'days' };
+};
+const addCreditTermToDate = (baseDate, amount, unit) => {
+    const match = baseDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match)
+        return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]) - 1;
+    const day = Number(match[3]);
+    const date = new Date(Date.UTC(year, month, day));
+    if (Number.isNaN(date.getTime()))
+        return null;
+    if (unit === 'months') {
+        date.setUTCMonth(date.getUTCMonth() + amount);
+    }
+    else if (unit === 'weeks') {
+        date.setUTCDate(date.getUTCDate() + amount * 7);
+    }
+    else {
+        date.setUTCDate(date.getUTCDate() + amount);
+    }
+    return date.toISOString().slice(0, 10);
+};
+const parseCreditDueInput = (value, saleDate) => {
+    const explicitDate = parseDateInput(value);
+    if (explicitDate) {
+        return { dueDate: explicitDate };
+    }
+    const term = parseCreditDueTerm(value);
+    if (!term)
+        return null;
+    if (saleDate) {
+        const dueDate = addCreditTermToDate(saleDate, term.amount, term.unit);
+        if (dueDate)
+            return { dueDate };
+    }
+    return { termAmount: term.amount, termUnit: term.unit };
 };
 const buildSaleDescription = (data) => {
     const parts = ['Venta Telegram'];
@@ -971,8 +1340,16 @@ const getGuidedSaleState = (pending) => {
             : undefined,
         currentProductId: typeof rawMeta.currentProductId === 'string' ? rawMeta.currentProductId : undefined,
         currentProductName: typeof rawMeta.currentProductName === 'string' ? rawMeta.currentProductName : undefined,
+        variantWizardIndex: typeof rawMeta.variantWizardIndex === 'number' ? rawMeta.variantWizardIndex : null,
+        variantWizardValues: Array.isArray(rawMeta.variantWizardValues)
+            ? rawMeta.variantWizardValues.map((item) => Number(item)).filter((item) => Number.isFinite(item) && item >= 0)
+            : null,
         pendingPriceAmount: typeof rawMeta.pendingPriceAmount === 'number' ? rawMeta.pendingPriceAmount : null,
         pendingPriceScope: rawMeta.pendingPriceScope === 'unit' || rawMeta.pendingPriceScope === 'total' ? rawMeta.pendingPriceScope : null,
+        pendingCreditTermAmount: typeof rawMeta.pendingCreditTermAmount === 'number' ? rawMeta.pendingCreditTermAmount : null,
+        pendingCreditTermUnit: rawMeta.pendingCreditTermUnit === 'days' || rawMeta.pendingCreditTermUnit === 'weeks' || rawMeta.pendingCreditTermUnit === 'months'
+            ? rawMeta.pendingCreditTermUnit
+            : null,
         fastMode: typeof rawMeta.fastMode === 'boolean' ? rawMeta.fastMode : undefined,
         pendingPriceProductIds: Array.isArray(rawMeta.pendingPriceProductIds) ? rawMeta.pendingPriceProductIds.map((item) => String(item)) : undefined,
         pendingTotalQty: typeof rawMeta.pendingTotalQty === 'number' ? rawMeta.pendingTotalQty : null,
@@ -983,6 +1360,25 @@ const getGuidedSaleState = (pending) => {
 };
 const updateGuidedSaleState = async (pendingId, data, meta) => {
     await dependencies_1.pendingEventRepository.updateData(pendingId, data, meta);
+};
+const askGuidedSaleVariantQuantityStep = async (chatId, productName, variants, index, values, totalQty) => {
+    const current = variants[index];
+    if (!current)
+        return;
+    const assigned = values.slice(0, index).reduce((sum, qty) => sum + qty, 0);
+    const progress = `${index + 1}/${variants.length}`;
+    const totalLine = totalQty && totalQty > 0
+        ? `\n🎯 Objetivo: ${totalQty}\n✅ Acumulado: ${assigned}\n⏳ Restante: ${Math.max(totalQty - assigned, 0)}`
+        : '';
+    await telegramClient_1.TelegramClient.sendMessage({
+        chatId,
+        text: `🧵 *${productName}*\n` +
+            `📌 Variante actual: *${current.attribute} ${current.value}*\n` +
+            `📍 Progreso: ${progress}${totalLine}\n\n` +
+            `✍️ Escribe solo la cantidad para *${current.attribute} ${current.value}*.\n` +
+            'Ejemplo: `0`, `3`, `10`',
+        parseMode: 'Markdown',
+    });
 };
 const askGuidedSaleCustomer = async (chatId) => {
     await telegramClient_1.TelegramClient.sendMessage({
@@ -998,12 +1394,15 @@ const askGuidedSaleProduct = async (chatId) => {
 };
 const askGuidedSaleVariants = async (chatId, productName, variants, totalQty) => {
     const list = variants.map((variant, index) => `${index + 1}) ${variant.attribute} ${variant.value}`).join('\n');
-    const totalLine = totalQty && totalQty > 0 ? `\nCantidad total detectada: ${totalQty}. Indica como se distribuye.` : '';
+    const totalLine = totalQty && totalQty > 0 ? `\nCantidad total detectada: ${totalQty}.` : '';
     await telegramClient_1.TelegramClient.sendMessage({
         chatId,
-        text: `Variantes de *${productName}*:\n${list}${totalLine}\n\nIndica cantidades así:\n1=10, 2=5\nTambién puedes usar el valor:\n28=10, S=5`,
+        text: `📦 *Variantes de ${productName}*\n\n` +
+            `Estas son las variantes disponibles:\n${list}${totalLine}\n\n` +
+            '✅ Para evitar errores, te las pediré una por una.',
         parseMode: 'Markdown',
     });
+    await askGuidedSaleVariantQuantityStep(chatId, productName, variants, 0, variants.map(() => 0), totalQty);
 };
 const askGuidedSaleAddMore = async (chatId) => {
     await telegramClient_1.TelegramClient.sendMessage({
@@ -1037,7 +1436,26 @@ const askGuidedSaleVariantPrices = async (chatId, productName, variants) => {
     const list = variants.map((variant, index) => `${index + 1}) ${variant.attribute} ${variant.value}`).join('\n');
     await telegramClient_1.TelegramClient.sendMessage({
         chatId,
-        text: `Precios por variante para *${productName}*:\n${list}\n\nIndica precios así:\n1=70000, 2=65000\n(o usa el valor: 28=70000, S=65000)`,
+        text: `💵 *Precios por variante de ${productName}*\n\n` +
+            `Estas son las variantes disponibles:\n${list}\n\n` +
+            '✅ Te los voy a pedir uno por uno para evitar errores.',
+        parseMode: 'Markdown',
+    });
+};
+const askGuidedSaleVariantPriceStep = async (chatId, productName, variants, prices, index) => {
+    const current = variants[index];
+    if (!current)
+        return;
+    const progress = `${index + 1}/${variants.length}`;
+    const pricedCount = prices.filter((price) => Number.isFinite(price) && price > 0).length;
+    await telegramClient_1.TelegramClient.sendMessage({
+        chatId,
+        text: `💵 *${productName}*\n` +
+            `🏷️ Talla: *${current.attribute} ${current.value}*\n` +
+            `📍 Progreso: ${progress}\n` +
+            `✅ Precios registrados: ${pricedCount}/${variants.length}\n\n` +
+            `¿A cómo vendes *${current.attribute} ${current.value}*?\n` +
+            'Ejemplo: `38000`',
         parseMode: 'Markdown',
     });
 };
@@ -1050,7 +1468,11 @@ const askGuidedSalePayment = async (chatId) => {
 const askGuidedSaleCreditDueDate = async (chatId) => {
     await telegramClient_1.TelegramClient.sendMessage({
         chatId,
-        text: '¿Para qué fecha es el pago? (YYYY-MM-DD o "hoy")',
+        text: '¿Qué plazo tiene para pagar? ⏳\n' +
+            'Puedes responder así:\n' +
+            '• `15 dias`, `1 semana`, `1 mes`, `3 meses`\n' +
+            '• o una fecha exacta: `2026-04-20`',
+        parseMode: 'Markdown',
     });
 };
 const askGuidedSaleDate = async (chatId) => {
@@ -1151,7 +1573,7 @@ const parseVariantQuantities = (text, variants) => {
     const normalized = normalizeText(text);
     const result = [];
     const pairs = [];
-    const pairRegex = /([a-zA-Z0-9]+)\s*[:=]\s*(\d+)/g;
+    const pairRegex = /([a-zA-Z0-9]+)\s*(?:[:=]|\|)\s*(\d+)/g;
     let match = pairRegex.exec(normalized);
     while (match !== null) {
         const key = match[1];
@@ -1165,20 +1587,23 @@ const parseVariantQuantities = (text, variants) => {
     const valueSet = new Set(variants.map((variant) => normalizeText(variant.value)));
     if (pairs.length === 0) {
         const tokens = normalized.split(/[\s,;]+/).filter(Boolean);
-        for (let i = 0; i < tokens.length - 1; i += 1) {
-            const key = tokens[i];
-            const qtyToken = tokens[i + 1];
-            const qty = Number(qtyToken);
-            if (!Number.isFinite(qty))
-                continue;
-            let cleaned = key;
-            attributes.forEach((attr) => {
-                if (attr && cleaned.startsWith(`${attr} `)) {
-                    cleaned = cleaned.slice(attr.length + 1);
+        const allNumericTokens = tokens.every((token) => /^\d+$/.test(token));
+        if (!allNumericTokens) {
+            for (let i = 0; i < tokens.length - 1; i += 1) {
+                const key = tokens[i];
+                const qtyToken = tokens[i + 1];
+                const qty = Number(qtyToken);
+                if (!Number.isFinite(qty))
+                    continue;
+                let cleaned = key;
+                attributes.forEach((attr) => {
+                    if (attr && cleaned.startsWith(`${attr} `)) {
+                        cleaned = cleaned.slice(attr.length + 1);
+                    }
+                });
+                if (valueSet.has(cleaned)) {
+                    pairs.push({ key: cleaned, qty });
                 }
-            });
-            if (valueSet.has(cleaned)) {
-                pairs.push({ key: cleaned, qty });
             }
         }
     }
@@ -1238,11 +1663,45 @@ const parseVariantQuantities = (text, variants) => {
 const computeTotalQty = (data) => data.items.reduce((sum, item) => sum + item.variants.reduce((inner, variant) => inner + variant.qty, 0), 0);
 const computeTotalAmount = (data) => data.items.reduce((sum, item) => sum + item.variants.reduce((inner, variant) => inner + (variant.unitPrice ? variant.unitPrice * variant.qty : 0), 0), 0);
 const allVariantsPriced = (data) => data.items.every((item) => item.variants.every((variant) => variant.unitPrice && variant.unitPrice > 0));
+const toSafeQty = (value) => {
+    const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
+    if (!Number.isFinite(parsed))
+        return null;
+    return Math.max(0, Math.round(parsed));
+};
+const formatInventoryConfirmErrorMessage = (data, error) => {
+    const errorType = error?.type ?? 'Error';
+    if (errorType !== 'InsufficientStock') {
+        return `No pude confirmar inventario: ${errorType}. Ajusta las cantidades e intenta de nuevo.`;
+    }
+    const item = error.productId ? data.items.find((entry) => entry.productId === error.productId) : null;
+    const variant = error.variantId ? item?.variants.find((entry) => entry.variantId === error.variantId) : null;
+    const productLabel = item?.productName?.trim() || (error.productId ? `ID ${error.productId}` : 'sin dato');
+    const variantLabel = variant
+        ? `${variant.attribute} ${variant.value}`.trim()
+        : error.variantId
+            ? `ID ${error.variantId}`
+            : 'sin dato';
+    const requestedQty = toSafeQty(error.requestedQty) ?? (variant ? toSafeQty(variant.qty) : null);
+    const availableQty = toSafeQty(error.availableQty);
+    const missingQty = requestedQty !== null && availableQty !== null ? Math.max(0, requestedQty - availableQty) : null;
+    const lines = ['No pude confirmar inventario por stock insuficiente.', `Producto: ${productLabel}`, `Talla/variante: ${variantLabel}`];
+    if (requestedQty !== null)
+        lines.push(`Solicitado: ${requestedQty}`);
+    if (availableQty !== null)
+        lines.push(`Disponible: ${availableQty}`);
+    if (missingQty !== null)
+        lines.push(`Faltan: ${missingQty}`);
+    lines.push('Ajusta esa cantidad y vuelve a confirmar.');
+    return lines.join('\n');
+};
 const advanceAfterItems = async (pendingId, chatId, data, meta) => {
     meta.currentProductId = undefined;
     meta.currentProductName = undefined;
     meta.candidateVariants = undefined;
     meta.candidateProducts = undefined;
+    meta.variantWizardIndex = null;
+    meta.variantWizardValues = null;
     if (!allVariantsPriced(data)) {
         const nextItem = data.items.find((item) => item.variants.some((variant) => !variant.unitPrice || variant.unitPrice <= 0));
         if (nextItem) {
@@ -1281,6 +1740,177 @@ const advanceAfterItems = async (pendingId, chatId, data, meta) => {
     }
     data.downPaymentAmount = 0;
     await sendGuidedSaleConfirmation(pendingId, chatId, data, meta);
+    return true;
+};
+const resetGuidedVariantWizard = (meta, totalVariants) => {
+    meta.variantWizardIndex = 0;
+    meta.variantWizardValues = Array.from({ length: totalVariants }, () => 0);
+};
+const clearGuidedVariantWizard = (meta) => {
+    meta.variantWizardIndex = null;
+    meta.variantWizardValues = null;
+};
+const resetGuidedPriceVariantWizard = (meta, variants, item) => {
+    const values = variants.map((variant) => {
+        const priced = item?.variants.find((entry) => entry.variantId === variant.id);
+        const unitPrice = Number(priced?.unitPrice ?? 0);
+        return Number.isFinite(unitPrice) && unitPrice > 0 ? Math.round(unitPrice) : 0;
+    });
+    const firstMissing = values.findIndex((value) => value <= 0);
+    meta.variantWizardValues = values;
+    meta.variantWizardIndex = firstMissing >= 0 ? firstMissing : 0;
+};
+const applyGuidedVariantSelection = async (pendingId, chatId, data, meta, variants) => {
+    const currentProductId = meta.currentProductId;
+    const currentProductName = meta.currentProductName;
+    if (!currentProductId || !currentProductName) {
+        await telegramClient_1.TelegramClient.sendMessage({ chatId, text: 'No pude identificar el producto actual. Intenta de nuevo.' });
+        return true;
+    }
+    const existing = data.items.find((item) => item.productId === currentProductId);
+    if (existing) {
+        const merge = new Map(existing.variants.map((variant) => [variant.variantId, variant]));
+        variants.forEach((variant) => {
+            const current = merge.get(variant.variantId);
+            if (current) {
+                current.qty += variant.qty;
+            }
+            else {
+                merge.set(variant.variantId, { ...variant });
+            }
+        });
+        existing.variants = Array.from(merge.values());
+    }
+    else {
+        data.items.push({
+            productId: currentProductId,
+            productName: currentProductName,
+            variants,
+        });
+    }
+    if (!meta.autoPriceApply && (data.unitPrice || data.totalAmount)) {
+        meta.pendingPriceAmount = data.unitPrice ?? data.totalAmount ?? null;
+        meta.pendingPriceScope = data.unitPrice ? 'unit' : 'total';
+        meta.autoPriceApply = true;
+    }
+    meta.pendingTotalQty = null;
+    clearGuidedVariantWizard(meta);
+    if (meta.autoPriceApply && meta.pendingPriceAmount && meta.pendingPriceAmount > 0) {
+        const targetItem = data.items.find((item) => item.productId === currentProductId);
+        if (targetItem) {
+            const totalQty = targetItem.variants.reduce((sum, variant) => sum + variant.qty, 0);
+            const unitPrice = meta.pendingPriceScope === 'total' ? (totalQty > 0 ? Math.round(meta.pendingPriceAmount / totalQty) : 0) : meta.pendingPriceAmount;
+            if (unitPrice > 0) {
+                targetItem.variants = targetItem.variants.map((variant) => ({ ...variant, unitPrice }));
+            }
+        }
+        const appliedItem = data.items.find((item) => item.productId === currentProductId);
+        const appliedOk = appliedItem?.variants.every((variant) => variant.unitPrice && variant.unitPrice > 0);
+        if (!appliedOk) {
+            meta.autoPriceApply = false;
+            meta.pendingPriceAmount = null;
+            meta.pendingPriceScope = null;
+            meta.step = 'price_mode';
+            await updateGuidedSaleState(pendingId, data, meta);
+            await askGuidedSalePrice(chatId);
+            return true;
+        }
+        meta.pendingPriceAmount = null;
+        meta.pendingPriceScope = null;
+        meta.autoPriceApply = false;
+        data.unitPrice = null;
+        data.totalAmount = null;
+        if (meta.fastMode || meta.skipAddMore) {
+            return await advanceAfterItems(pendingId, chatId, data, meta);
+        }
+        meta.step = 'add_more';
+        meta.currentProductId = undefined;
+        meta.currentProductName = undefined;
+        meta.candidateVariants = undefined;
+        meta.candidateProducts = undefined;
+        clearGuidedVariantWizard(meta);
+        await updateGuidedSaleState(pendingId, data, meta);
+        await askGuidedSaleAddMore(chatId);
+        return true;
+    }
+    if (data.unitPrice || data.totalAmount) {
+        meta.step = 'price_apply_parsed';
+        await updateGuidedSaleState(pendingId, data, meta);
+        await telegramClient_1.TelegramClient.sendMessage({
+            chatId,
+            text: 'Detecte un precio en tu mensaje. ¿Aplica para este producto?',
+            replyMarkup: buildYesNoKeyboard(),
+        });
+        return true;
+    }
+    meta.step = 'price_mode';
+    await updateGuidedSaleState(pendingId, data, meta);
+    await askGuidedSalePrice(chatId);
+    return true;
+};
+const continueAfterGuidedVariantPrices = async (pendingId, chatId, data, meta) => {
+    if (meta.fastMode) {
+        const remaining = (meta.pendingPriceProductIds ?? []).filter((id) => id !== meta.currentProductId);
+        meta.pendingPriceProductIds = remaining;
+        if (remaining.length > 0) {
+            const nextId = remaining[0];
+            const nextItem = data.items.find((item) => item.productId === nextId);
+            if (nextItem) {
+                meta.currentProductId = nextItem.productId;
+                meta.currentProductName = nextItem.productName;
+                meta.candidateVariants = buildCandidateVariantsFromItem(nextItem);
+                meta.step = 'price_mode';
+                clearGuidedVariantWizard(meta);
+                await updateGuidedSaleState(pendingId, data, meta);
+                await askGuidedSalePrice(chatId);
+                return true;
+            }
+        }
+        meta.currentProductId = undefined;
+        meta.currentProductName = undefined;
+        meta.candidateVariants = undefined;
+        meta.candidateProducts = undefined;
+        clearGuidedVariantWizard(meta);
+        if (data.paymentMethod && /credito|cr[eé]dito/.test(normalizeText(data.paymentMethod)) && !data.creditDueDate) {
+            meta.step = 'credit_due';
+            await updateGuidedSaleState(pendingId, data, meta);
+            await askGuidedSaleCreditDueDate(chatId);
+            return true;
+        }
+        if (!data.paymentMethod) {
+            meta.step = 'payment';
+            await updateGuidedSaleState(pendingId, data, meta);
+            await askGuidedSalePayment(chatId);
+            return true;
+        }
+        if (!data.date) {
+            meta.step = 'date';
+            await updateGuidedSaleState(pendingId, data, meta);
+            await askGuidedSaleDate(chatId);
+            return true;
+        }
+        if (shouldCaptureGuidedDownPayment(data)) {
+            meta.step = 'down_payment_confirm';
+            await updateGuidedSaleState(pendingId, data, meta);
+            await askGuidedSaleDownPayment(chatId);
+            return true;
+        }
+        data.downPaymentAmount = 0;
+        await sendGuidedSaleConfirmation(pendingId, chatId, data, meta);
+        return true;
+    }
+    if (meta.skipAddMore) {
+        clearGuidedVariantWizard(meta);
+        return await advanceAfterItems(pendingId, chatId, data, meta);
+    }
+    meta.step = 'add_more';
+    meta.currentProductId = undefined;
+    meta.currentProductName = undefined;
+    meta.candidateVariants = undefined;
+    meta.candidateProducts = undefined;
+    clearGuidedVariantWizard(meta);
+    await updateGuidedSaleState(pendingId, data, meta);
+    await askGuidedSaleAddMore(chatId);
     return true;
 };
 const buildCandidateVariantsFromItem = (item) => item.variants.map((variant) => ({
@@ -1929,6 +2559,9 @@ const startGuidedSaleWithPrefill = async (chatId, saleInput, productNameGuess) =
     }
     if (candidateVariants) {
         meta.candidateVariants = candidateVariants;
+        if (meta.step === 'variants') {
+            resetGuidedVariantWizard(meta, candidateVariants.length);
+        }
     }
     if (saleInput.quantity && saleInput.quantity > 0) {
         meta.pendingTotalQty = saleInput.quantity;
@@ -2101,6 +2734,9 @@ const startFastSaleFromText = async (chatId, companyId, rawText, options) => {
         }
         return false;
     }
+    const sourceText = cleanedText || rawText;
+    const explicitSaleQty = parseExplicitSaleQty(sourceText);
+    const hasPackHint = hasPackHintInSaleText(sourceText);
     const data = {
         saleId: dependencies_1.inventoryGateway.idGenerator(),
         customerName: parsed.customerName,
@@ -2206,6 +2842,13 @@ const startFastSaleFromText = async (chatId, companyId, rawText, options) => {
                 return false;
             }
             const expiresAt = new Date(Date.now() + PENDING_EXPIRATION_MINUTES * 60 * 1000);
+            const effectivePendingTotalQty = parsed.items.length === 1 && explicitSaleQty && hasPackHint
+                ? explicitSaleQty
+                : pendingTotalQty > 0
+                    ? pendingTotalQty
+                    : parsed.items.length === 1 && explicitSaleQty
+                        ? explicitSaleQty
+                        : null;
             const meta = {
                 step: 'variants',
                 currentProductId: product.id.toString(),
@@ -2215,12 +2858,14 @@ const startFastSaleFromText = async (chatId, companyId, rawText, options) => {
                     attribute: variant.attribute,
                     value: variant.value,
                 })),
-                pendingTotalQty: pendingTotalQty > 0 ? pendingTotalQty : null,
+                variantWizardIndex: 0,
+                variantWizardValues: activeVariants.map(() => 0),
+                pendingTotalQty: effectivePendingTotalQty,
                 pendingPriceAmount,
                 pendingPriceScope,
                 autoPriceApply: pendingPriceAmount ? true : undefined,
             };
-            await dependencies_1.pendingEventRepository.create({
+            const created = await dependencies_1.pendingEventRepository.create({
                 companyId,
                 telegramUserId: chatId,
                 eventType: 'sale_guided',
@@ -2232,6 +2877,24 @@ const startFastSaleFromText = async (chatId, companyId, rawText, options) => {
             if (!meta.candidateVariants || meta.candidateVariants.length === 0) {
                 await telegramClient_1.TelegramClient.sendMessage({ chatId, text: 'No pude cargar las variantes para este producto.' });
                 return true;
+            }
+            const autoQty = meta.pendingTotalQty && meta.pendingTotalQty > 0 ? Math.round(meta.pendingTotalQty) : 0;
+            if (meta.candidateVariants.length === 1 && autoQty > 0) {
+                const only = meta.candidateVariants[0];
+                const variantLabel = `${only.attribute} ${only.value}`.trim();
+                await telegramClient_1.TelegramClient.sendMessage({
+                    chatId,
+                    text: `Detecte una sola variante (${variantLabel}) y asigne automaticamente la cantidad ${autoQty}.`,
+                });
+                return await applyGuidedVariantSelection(created.id, chatId, data, meta, [
+                    {
+                        variantId: only.id,
+                        attribute: only.attribute,
+                        value: only.value,
+                        qty: autoQty,
+                        unitPrice: null,
+                    },
+                ]);
             }
             await askGuidedSaleVariants(chatId, product.name, meta.candidateVariants, meta.pendingTotalQty ?? null);
             return true;
@@ -2351,14 +3014,30 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             data.paymentMethod = text;
         }
         else if (meta.step === 'credit_due') {
-            const due = parseDateInput(text);
-            if (due)
-                data.creditDueDate = due;
+            const parsedDue = parseCreditDueInput(text, data.date ?? null);
+            if (parsedDue?.dueDate) {
+                data.creditDueDate = parsedDue.dueDate;
+                meta.pendingCreditTermAmount = null;
+                meta.pendingCreditTermUnit = null;
+            }
+            else if (parsedDue?.termAmount && parsedDue.termUnit) {
+                data.creditDueDate = null;
+                meta.pendingCreditTermAmount = parsedDue.termAmount;
+                meta.pendingCreditTermUnit = parsedDue.termUnit;
+            }
         }
         else if (meta.step === 'date') {
             const date = parseDateInput(text);
-            if (date)
+            if (date) {
                 data.date = date;
+                if (meta.pendingCreditTermAmount && meta.pendingCreditTermUnit) {
+                    const dueDate = addCreditTermToDate(date, meta.pendingCreditTermAmount, meta.pendingCreditTermUnit);
+                    if (dueDate)
+                        data.creditDueDate = dueDate;
+                    meta.pendingCreditTermAmount = null;
+                    meta.pendingCreditTermUnit = null;
+                }
+            }
         }
         const nextItem = data.items.find((item) => item.variants.some((variant) => !variant.unitPrice || variant.unitPrice <= 0));
         if (nextItem) {
@@ -2396,6 +3075,7 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             meta.currentProductId = undefined;
             meta.currentProductName = undefined;
             meta.candidateVariants = undefined;
+            clearGuidedVariantWizard(meta);
             await updateGuidedSaleState(pending.id, data, meta);
             return true;
         }
@@ -2405,6 +3085,7 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             attribute: variant.attribute,
             value: variant.value,
         }));
+        resetGuidedVariantWizard(meta, meta.candidateVariants.length);
         await updateGuidedSaleState(pending.id, data, meta);
         await askGuidedSaleVariants(chatId, selected.name, meta.candidateVariants, meta.pendingTotalQty ?? null);
         return true;
@@ -2458,6 +3139,7 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
                     attribute: variant.attribute,
                     value: variant.value,
                 }));
+                resetGuidedVariantWizard(meta, meta.candidateVariants.length);
                 await updateGuidedSaleState(pending.id, data, meta);
                 await askGuidedSaleVariants(chatId, skuMatch.name, meta.candidateVariants, meta.pendingTotalQty ?? null);
                 return true;
@@ -2492,6 +3174,7 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
                 attribute: variant.attribute,
                 value: variant.value,
             }));
+            resetGuidedVariantWizard(meta, meta.candidateVariants.length);
             await updateGuidedSaleState(pending.id, data, meta);
             await askGuidedSaleVariants(chatId, product.name, meta.candidateVariants, meta.pendingTotalQty ?? null);
             return true;
@@ -2504,28 +3187,92 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
         return true;
     }
     if (meta.step === 'variants' && meta.currentProductId && meta.currentProductName && meta.candidateVariants?.length) {
-        const variants = parseVariantQuantities(text, meta.candidateVariants);
+        const wizardEnabled = typeof meta.variantWizardIndex === 'number';
+        const candidateVariants = meta.candidateVariants;
+        const currentProductName = meta.currentProductName;
+        if (wizardEnabled) {
+            const totalVariants = candidateVariants.length;
+            const sourceValues = Array.isArray(meta.variantWizardValues) ? meta.variantWizardValues : [];
+            const draftValues = Array.from({ length: totalVariants }, (_, index) => {
+                const raw = Number(sourceValues[index] ?? 0);
+                return Number.isFinite(raw) && raw >= 0 ? Math.round(raw) : 0;
+            });
+            let currentIndex = Math.trunc(meta.variantWizardIndex ?? 0);
+            if (currentIndex < 0)
+                currentIndex = 0;
+            if (currentIndex >= totalVariants)
+                currentIndex = totalVariants - 1;
+            const finalizeWizard = async () => {
+                const totalAssigned = draftValues.reduce((sum, value) => sum + value, 0);
+                if (meta.pendingTotalQty && meta.pendingTotalQty > 0 && totalAssigned !== meta.pendingTotalQty) {
+                    await telegramClient_1.TelegramClient.sendMessage({
+                        chatId,
+                        text: `Aviso: la suma por variantes fue ${totalAssigned} y la cantidad detectada era ${meta.pendingTotalQty}. Continuare con ${totalAssigned}.`,
+                    });
+                }
+                const capturedVariants = candidateVariants
+                    .map((variant, index) => ({
+                    variantId: variant.id,
+                    attribute: variant.attribute,
+                    value: variant.value,
+                    qty: draftValues[index] ?? 0,
+                    unitPrice: null,
+                }))
+                    .filter((variant) => variant.qty > 0);
+                if (capturedVariants.length === 0) {
+                    await telegramClient_1.TelegramClient.sendMessage({
+                        chatId,
+                        text: 'Todas las variantes quedaron en 0. Ingresa al menos una cantidad mayor a 0.',
+                    });
+                    resetGuidedVariantWizard(meta, totalVariants);
+                    await updateGuidedSaleState(pending.id, data, meta);
+                    await askGuidedSaleVariantQuantityStep(chatId, currentProductName, candidateVariants, 0, meta.variantWizardValues ?? [], meta.pendingTotalQty ?? null);
+                    return true;
+                }
+                return await applyGuidedVariantSelection(pending.id, chatId, data, meta, capturedVariants);
+            };
+            const qty = parseNonNegativeQuantity(text);
+            if (qty === null) {
+                await telegramClient_1.TelegramClient.sendMessage({
+                    chatId,
+                    text: 'Escribe solo un numero entero (ej: 0, 5, 20).',
+                });
+                await askGuidedSaleVariantQuantityStep(chatId, currentProductName, candidateVariants, currentIndex, draftValues, meta.pendingTotalQty ?? null);
+                return true;
+            }
+            draftValues[currentIndex] = qty;
+            const nextIndex = currentIndex + 1;
+            if (nextIndex < totalVariants) {
+                meta.variantWizardIndex = nextIndex;
+                meta.variantWizardValues = draftValues;
+                await updateGuidedSaleState(pending.id, data, meta);
+                await askGuidedSaleVariantQuantityStep(chatId, currentProductName, candidateVariants, nextIndex, draftValues, meta.pendingTotalQty ?? null);
+                return true;
+            }
+            return await finalizeWizard();
+        }
+        const variants = parseVariantQuantities(text, candidateVariants);
         if (variants.length === 0) {
-            if (meta.candidateVariants.length === 1) {
+            if (candidateVariants.length === 1) {
                 const qty = parseSingleQuantity(text);
                 if (qty) {
-                    const only = meta.candidateVariants[0];
-                    const singleVariant = {
-                        variantId: only.id,
-                        attribute: only.attribute,
-                        value: only.value,
-                        qty,
-                        unitPrice: null,
-                    };
-                    data.items.push({
-                        productId: meta.currentProductId,
-                        productName: meta.currentProductName,
-                        variants: [singleVariant],
-                    });
-                    meta.step = 'price_mode';
-                    await updateGuidedSaleState(pending.id, data, meta);
-                    await askGuidedSalePrice(chatId);
-                    return true;
+                    if (meta.pendingTotalQty && meta.pendingTotalQty > 0 && qty !== meta.pendingTotalQty) {
+                        await telegramClient_1.TelegramClient.sendMessage({
+                            chatId,
+                            text: `La cantidad debe sumar ${meta.pendingTotalQty}. Ajusta el valor y envíalo de nuevo.`,
+                        });
+                        return true;
+                    }
+                    const only = candidateVariants[0];
+                    return await applyGuidedVariantSelection(pending.id, chatId, data, meta, [
+                        {
+                            variantId: only.id,
+                            attribute: only.attribute,
+                            value: only.value,
+                            qty,
+                            unitPrice: null,
+                        },
+                    ]);
                 }
                 await telegramClient_1.TelegramClient.sendMessage({
                     chatId,
@@ -2539,84 +3286,15 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             });
             return true;
         }
-        const existing = data.items.find((item) => item.productId === meta.currentProductId);
-        if (existing) {
-            const merge = new Map(existing.variants.map((variant) => [variant.variantId, variant]));
-            variants.forEach((variant) => {
-                const current = merge.get(variant.variantId);
-                if (current) {
-                    current.qty += variant.qty;
-                }
-                else {
-                    merge.set(variant.variantId, { ...variant });
-                }
-            });
-            existing.variants = Array.from(merge.values());
-        }
-        else {
-            data.items.push({
-                productId: meta.currentProductId,
-                productName: meta.currentProductName,
-                variants,
-            });
-        }
-        if (!meta.autoPriceApply && (data.unitPrice || data.totalAmount)) {
-            meta.pendingPriceAmount = data.unitPrice ?? data.totalAmount ?? null;
-            meta.pendingPriceScope = data.unitPrice ? 'unit' : 'total';
-            meta.autoPriceApply = true;
-        }
-        meta.pendingTotalQty = null;
-        if (meta.autoPriceApply && meta.pendingPriceAmount && meta.pendingPriceAmount > 0) {
-            const targetItem = data.items.find((item) => item.productId === meta.currentProductId);
-            if (targetItem) {
-                const totalQty = targetItem.variants.reduce((sum, variant) => sum + variant.qty, 0);
-                const unitPrice = meta.pendingPriceScope === 'total' ? (totalQty > 0 ? Math.round(meta.pendingPriceAmount / totalQty) : 0) : meta.pendingPriceAmount;
-                if (unitPrice > 0) {
-                    targetItem.variants = targetItem.variants.map((variant) => ({ ...variant, unitPrice }));
-                }
-            }
-            const appliedItem = data.items.find((item) => item.productId === meta.currentProductId);
-            const appliedOk = appliedItem?.variants.every((variant) => variant.unitPrice && variant.unitPrice > 0);
-            if (!appliedOk) {
-                meta.autoPriceApply = false;
-                meta.pendingPriceAmount = null;
-                meta.pendingPriceScope = null;
-                meta.step = 'price_mode';
-                await updateGuidedSaleState(pending.id, data, meta);
-                await askGuidedSalePrice(chatId);
-                return true;
-            }
-            meta.pendingPriceAmount = null;
-            meta.pendingPriceScope = null;
-            meta.autoPriceApply = false;
-            data.unitPrice = null;
-            data.totalAmount = null;
-            if (meta.fastMode || meta.skipAddMore) {
-                return await advanceAfterItems(pending.id, chatId, data, meta);
-            }
-            meta.step = 'add_more';
-            meta.currentProductId = undefined;
-            meta.currentProductName = undefined;
-            meta.candidateVariants = undefined;
-            meta.candidateProducts = undefined;
-            await updateGuidedSaleState(pending.id, data, meta);
-            await askGuidedSaleAddMore(chatId);
-            return true;
-        }
-        if (data.unitPrice || data.totalAmount) {
-            meta.step = 'price_apply_parsed';
-            await updateGuidedSaleState(pending.id, data, meta);
+        const parsedTotal = variants.reduce((sum, variant) => sum + variant.qty, 0);
+        if (meta.pendingTotalQty && meta.pendingTotalQty > 0 && parsedTotal !== meta.pendingTotalQty) {
             await telegramClient_1.TelegramClient.sendMessage({
                 chatId,
-                text: 'Detecte un precio en tu mensaje. ¿Aplica para este producto?',
-                replyMarkup: buildYesNoKeyboard(),
+                text: `La suma por variantes fue ${parsedTotal} y debe ser ${meta.pendingTotalQty}. Corrige las cantidades y envíalas de nuevo.`,
             });
             return true;
         }
-        meta.step = 'price_mode';
-        await updateGuidedSaleState(pending.id, data, meta);
-        await askGuidedSalePrice(chatId);
-        return true;
+        return await applyGuidedVariantSelection(pending.id, chatId, data, meta, variants);
     }
     if (meta.step === 'price_apply_parsed') {
         const answer = parseYesNo(text);
@@ -2650,6 +3328,7 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             meta.currentProductName = undefined;
             meta.candidateVariants = undefined;
             meta.candidateProducts = undefined;
+            clearGuidedVariantWizard(meta);
             await updateGuidedSaleState(pending.id, data, meta);
             await askGuidedSaleAddMore(chatId);
             return true;
@@ -2689,9 +3368,20 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             return true;
         }
         meta.step = 'price_variants';
+        const targetItem = meta.currentProductId ? data.items.find((item) => item.productId === meta.currentProductId) ?? null : null;
+        if (targetItem) {
+            meta.candidateVariants = buildCandidateVariantsFromItem(targetItem);
+        }
+        if (meta.candidateVariants?.length) {
+            resetGuidedPriceVariantWizard(meta, meta.candidateVariants, targetItem);
+        }
+        else {
+            clearGuidedVariantWizard(meta);
+        }
         await updateGuidedSaleState(pending.id, data, meta);
-        if (meta.currentProductName && meta.candidateVariants) {
+        if (meta.currentProductName && meta.candidateVariants?.length) {
             await askGuidedSaleVariantPrices(chatId, meta.currentProductName, meta.candidateVariants);
+            await askGuidedSaleVariantPriceStep(chatId, meta.currentProductName, meta.candidateVariants, meta.variantWizardValues ?? [], meta.variantWizardIndex ?? 0);
         }
         else {
             await telegramClient_1.TelegramClient.sendMessage({ chatId, text: 'No pude cargar las variantes para precios. Intenta de nuevo o usa "venta guiada".' });
@@ -2728,6 +3418,7 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             meta.currentProductName = undefined;
             meta.candidateVariants = undefined;
             meta.candidateProducts = undefined;
+            clearGuidedVariantWizard(meta);
             await updateGuidedSaleState(pending.id, data, meta);
             await askGuidedSaleAddMore(chatId);
             return true;
@@ -2790,6 +3481,7 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             meta.currentProductName = undefined;
             meta.candidateVariants = undefined;
             meta.candidateProducts = undefined;
+            clearGuidedVariantWizard(meta);
             if (data.paymentMethod && /credito|cr[eé]dito/.test(normalizeText(data.paymentMethod)) && !data.creditDueDate) {
                 meta.step = 'credit_due';
                 await updateGuidedSaleState(pending.id, data, meta);
@@ -2826,6 +3518,7 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
         meta.currentProductName = undefined;
         meta.candidateVariants = undefined;
         meta.candidateProducts = undefined;
+        clearGuidedVariantWizard(meta);
         await updateGuidedSaleState(pending.id, data, meta);
         await askGuidedSaleAddMore(chatId);
         return true;
@@ -2840,6 +3533,80 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             await telegramClient_1.TelegramClient.sendMessage({ chatId, text: 'No pude identificar el producto actual. Intenta de nuevo.' });
             return true;
         }
+        const candidateVariants = meta.candidateVariants;
+        const wizardEnabled = typeof meta.variantWizardIndex === 'number';
+        if (wizardEnabled) {
+            const draftPrices = candidateVariants.map((variant, index) => {
+                const fromItem = Number(targetItem.variants.find((entry) => entry.variantId === variant.id)?.unitPrice ?? 0);
+                const fromMeta = Number(meta.variantWizardValues?.[index] ?? 0);
+                const price = fromItem > 0 ? fromItem : fromMeta;
+                return Number.isFinite(price) && price > 0 ? Math.round(price) : 0;
+            });
+            let currentIndex = Math.trunc(meta.variantWizardIndex ?? 0);
+            if (currentIndex < 0)
+                currentIndex = 0;
+            if (currentIndex >= candidateVariants.length)
+                currentIndex = candidateVariants.length - 1;
+            while (currentIndex < candidateVariants.length && draftPrices[currentIndex] > 0) {
+                currentIndex += 1;
+            }
+            if (currentIndex >= candidateVariants.length) {
+                const missing = targetItem.variants.filter((variant) => !variant.unitPrice || variant.unitPrice <= 0);
+                if (missing.length === 0) {
+                    clearGuidedVariantWizard(meta);
+                    return await continueAfterGuidedVariantPrices(pending.id, chatId, data, meta);
+                }
+                resetGuidedPriceVariantWizard(meta, candidateVariants, targetItem);
+                await updateGuidedSaleState(pending.id, data, meta);
+                if (meta.currentProductName) {
+                    await askGuidedSaleVariantPriceStep(chatId, meta.currentProductName, candidateVariants, meta.variantWizardValues ?? [], meta.variantWizardIndex ?? 0);
+                }
+                return true;
+            }
+            const price = parseGuidedVariantPriceInput(text);
+            if (price === null || price <= 0) {
+                meta.variantWizardIndex = currentIndex;
+                meta.variantWizardValues = draftPrices;
+                await updateGuidedSaleState(pending.id, data, meta);
+                await telegramClient_1.TelegramClient.sendMessage({
+                    chatId,
+                    text: 'No entendí el precio. Escribe solo el valor numérico, por ejemplo: 38000.',
+                });
+                if (meta.currentProductName) {
+                    await askGuidedSaleVariantPriceStep(chatId, meta.currentProductName, candidateVariants, draftPrices, currentIndex);
+                }
+                return true;
+            }
+            const nextPrice = Math.round(price);
+            const currentVariant = candidateVariants[currentIndex];
+            draftPrices[currentIndex] = nextPrice;
+            targetItem.variants = targetItem.variants.map((variant) => variant.variantId === currentVariant.id ? { ...variant, unitPrice: nextPrice } : variant);
+            let nextIndex = currentIndex + 1;
+            while (nextIndex < candidateVariants.length && draftPrices[nextIndex] > 0) {
+                nextIndex += 1;
+            }
+            if (nextIndex < candidateVariants.length) {
+                meta.variantWizardIndex = nextIndex;
+                meta.variantWizardValues = draftPrices;
+                await updateGuidedSaleState(pending.id, data, meta);
+                if (meta.currentProductName) {
+                    await askGuidedSaleVariantPriceStep(chatId, meta.currentProductName, candidateVariants, draftPrices, nextIndex);
+                }
+                return true;
+            }
+            const missing = targetItem.variants.filter((variant) => !variant.unitPrice || variant.unitPrice <= 0);
+            if (missing.length > 0) {
+                resetGuidedPriceVariantWizard(meta, candidateVariants, targetItem);
+                await updateGuidedSaleState(pending.id, data, meta);
+                await telegramClient_1.TelegramClient.sendMessage({ chatId, text: 'Faltan algunos precios. Continuemos variante por variante.' });
+                if (meta.currentProductName) {
+                    await askGuidedSaleVariantPriceStep(chatId, meta.currentProductName, candidateVariants, meta.variantWizardValues ?? [], meta.variantWizardIndex ?? 0);
+                }
+                return true;
+            }
+            clearGuidedVariantWizard(meta);
+            return await continueAfterGuidedVariantPrices(pending.id, chatId, data, meta);
+        }
         const pricePairs = [];
         const pairRegex = /([a-zA-Z0-9]+)\s*[:=]\s*([\d.,]+)/g;
         let match = pairRegex.exec(normalized);
@@ -2853,11 +3620,6 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             pricePairs.push({ key, price });
             match = pairRegex.exec(normalized);
         }
-        if (!meta.candidateVariants || meta.candidateVariants.length === 0) {
-            await telegramClient_1.TelegramClient.sendMessage({ chatId, text: 'No pude identificar las variantes. Intenta de nuevo.' });
-            return true;
-        }
-        const candidateVariants = meta.candidateVariants;
         const indexMap = new Map();
         for (const [index, variant] of candidateVariants.entries()) {
             indexMap.set(index + 1, variant);
@@ -2883,7 +3645,7 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             ...variant,
             unitPrice: prices.get(variant.variantId) ?? variant.unitPrice ?? null,
         }));
-        const missing = targetItem.variants.filter((variant) => !variant.unitPrice);
+        const missing = targetItem.variants.filter((variant) => !variant.unitPrice || variant.unitPrice <= 0);
         if (missing.length > 0) {
             await telegramClient_1.TelegramClient.sendMessage({
                 chatId,
@@ -2892,65 +3654,8 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             await updateGuidedSaleState(pending.id, data, meta);
             return true;
         }
-        if (meta.fastMode) {
-            const remaining = (meta.pendingPriceProductIds ?? []).filter((id) => id !== meta.currentProductId);
-            meta.pendingPriceProductIds = remaining;
-            if (remaining.length > 0) {
-                const nextId = remaining[0];
-                const nextItem = data.items.find((item) => item.productId === nextId);
-                if (nextItem) {
-                    meta.currentProductId = nextItem.productId;
-                    meta.currentProductName = nextItem.productName;
-                    meta.candidateVariants = buildCandidateVariantsFromItem(nextItem);
-                    meta.step = 'price_mode';
-                    await updateGuidedSaleState(pending.id, data, meta);
-                    await askGuidedSalePrice(chatId);
-                    return true;
-                }
-            }
-            meta.currentProductId = undefined;
-            meta.currentProductName = undefined;
-            meta.candidateVariants = undefined;
-            meta.candidateProducts = undefined;
-            if (data.paymentMethod && /credito|cr[eé]dito/.test(normalizeText(data.paymentMethod)) && !data.creditDueDate) {
-                meta.step = 'credit_due';
-                await updateGuidedSaleState(pending.id, data, meta);
-                await askGuidedSaleCreditDueDate(chatId);
-                return true;
-            }
-            if (!data.paymentMethod) {
-                meta.step = 'payment';
-                await updateGuidedSaleState(pending.id, data, meta);
-                await askGuidedSalePayment(chatId);
-                return true;
-            }
-            if (!data.date) {
-                meta.step = 'date';
-                await updateGuidedSaleState(pending.id, data, meta);
-                await askGuidedSaleDate(chatId);
-                return true;
-            }
-            if (shouldCaptureGuidedDownPayment(data)) {
-                meta.step = 'down_payment_confirm';
-                await updateGuidedSaleState(pending.id, data, meta);
-                await askGuidedSaleDownPayment(chatId);
-                return true;
-            }
-            data.downPaymentAmount = 0;
-            await sendGuidedSaleConfirmation(pending.id, chatId, data, meta);
-            return true;
-        }
-        if (meta.skipAddMore) {
-            return await advanceAfterItems(pending.id, chatId, data, meta);
-        }
-        meta.step = 'add_more';
-        meta.currentProductId = undefined;
-        meta.currentProductName = undefined;
-        meta.candidateVariants = undefined;
-        meta.candidateProducts = undefined;
-        await updateGuidedSaleState(pending.id, data, meta);
-        await askGuidedSaleAddMore(chatId);
-        return true;
+        clearGuidedVariantWizard(meta);
+        return await continueAfterGuidedVariantPrices(pending.id, chatId, data, meta);
     }
     if (meta.step === 'add_more') {
         const answer = parseYesNo(text);
@@ -3020,18 +3725,52 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             await askGuidedSaleCreditDueDate(chatId);
             return true;
         }
+        data.creditDueDate = null;
+        meta.pendingCreditTermAmount = null;
+        meta.pendingCreditTermUnit = null;
         meta.step = 'date';
         await updateGuidedSaleState(pending.id, data, meta);
         await askGuidedSaleDate(chatId);
         return true;
     }
     if (meta.step === 'credit_due') {
-        const due = parseDateInput(text);
-        if (!due) {
-            await telegramClient_1.TelegramClient.sendMessage({ chatId, text: 'No entendi la fecha. Usa YYYY-MM-DD o "hoy".' });
+        const parsedDue = parseCreditDueInput(text, data.date ?? null);
+        if (!parsedDue) {
+            await telegramClient_1.TelegramClient.sendMessage({
+                chatId,
+                text: 'No entendí el plazo. Ejemplos: `15 dias`, `1 semana`, `1 mes` o fecha `2026-04-20`.',
+                parseMode: 'Markdown',
+            });
             return true;
         }
-        data.creditDueDate = due;
+        if (parsedDue.dueDate) {
+            data.creditDueDate = parsedDue.dueDate;
+            meta.pendingCreditTermAmount = null;
+            meta.pendingCreditTermUnit = null;
+        }
+        else if (parsedDue.termAmount && parsedDue.termUnit) {
+            data.creditDueDate = null;
+            meta.pendingCreditTermAmount = parsedDue.termAmount;
+            meta.pendingCreditTermUnit = parsedDue.termUnit;
+        }
+        if (data.date) {
+            if (!data.creditDueDate && meta.pendingCreditTermAmount && meta.pendingCreditTermUnit) {
+                const dueDate = addCreditTermToDate(data.date, meta.pendingCreditTermAmount, meta.pendingCreditTermUnit);
+                if (dueDate)
+                    data.creditDueDate = dueDate;
+                meta.pendingCreditTermAmount = null;
+                meta.pendingCreditTermUnit = null;
+            }
+            if (shouldCaptureGuidedDownPayment(data)) {
+                meta.step = 'down_payment_confirm';
+                await updateGuidedSaleState(pending.id, data, meta);
+                await askGuidedSaleDownPayment(chatId);
+                return true;
+            }
+            data.downPaymentAmount = 0;
+            await sendGuidedSaleConfirmation(pending.id, chatId, data, meta);
+            return true;
+        }
         meta.step = 'date';
         await updateGuidedSaleState(pending.id, data, meta);
         await askGuidedSaleDate(chatId);
@@ -3044,6 +3783,13 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             return true;
         }
         data.date = date;
+        if (meta.pendingCreditTermAmount && meta.pendingCreditTermUnit) {
+            const dueDate = addCreditTermToDate(date, meta.pendingCreditTermAmount, meta.pendingCreditTermUnit);
+            if (dueDate)
+                data.creditDueDate = dueDate;
+            meta.pendingCreditTermAmount = null;
+            meta.pendingCreditTermUnit = null;
+        }
         if (shouldCaptureGuidedDownPayment(data)) {
             meta.step = 'down_payment_confirm';
             await updateGuidedSaleState(pending.id, data, meta);
@@ -3131,7 +3877,7 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             const error = confirmResult.error;
             await telegramClient_1.TelegramClient.sendMessage({
                 chatId,
-                text: `No pude confirmar inventario: ${error?.type ?? 'Error'}. Ajusta las cantidades e intenta de nuevo.`,
+                text: formatInventoryConfirmErrorMessage(data, error),
             });
             return true;
         }
@@ -3478,14 +4224,62 @@ router.get('/sign-session/:pendingId', async (req, res) => {
         return res.status(403).json({ ok: false, message: 'Token de firma inválido' });
     }
     const invoice = state.pending.interpretedData;
+    const groupedProducts = new Map();
+    const rawItems = Array.isArray(invoice.items) ? invoice.items : [];
+    for (const entry of rawItems) {
+        const description = String(entry?.description ?? '').trim();
+        const qty = Number(entry?.qty ?? 0);
+        const unitPrice = Number(entry?.unitPrice ?? 0);
+        const rawLineTotal = Number(entry?.lineTotal ?? qty * unitPrice);
+        const safeQty = Number.isFinite(qty) && qty > 0 ? Math.round(qty) : 0;
+        const safeUnitPrice = Number.isFinite(unitPrice) && unitPrice >= 0 ? Math.round(unitPrice) : 0;
+        const safeLineTotal = Number.isFinite(rawLineTotal) ? Math.round(rawLineTotal) : Math.round(safeQty * safeUnitPrice);
+        const separatorIndex = description.indexOf(' - ');
+        const productName = (separatorIndex >= 0 ? description.slice(0, separatorIndex).trim() : description) || 'Producto';
+        const lineLabel = (separatorIndex >= 0 ? description.slice(separatorIndex + 3).trim() : description) || 'Detalle';
+        const current = groupedProducts.get(productName);
+        const line = { label: lineLabel, qty: safeQty, unitPrice: safeUnitPrice, subtotal: safeLineTotal };
+        if (!current) {
+            groupedProducts.set(productName, {
+                name: productName,
+                subtotal: safeLineTotal,
+                lines: [line],
+            });
+            continue;
+        }
+        current.subtotal += safeLineTotal;
+        current.lines.push(line);
+    }
+    const products = Array.from(groupedProducts.values());
+    const totalUnits = products.reduce((sum, product) => sum + product.lines.reduce((inner, line) => inner + line.qty, 0), 0);
+    const totalAmount = Number(invoice.totalAmount ?? 0);
+    const downPaymentAmount = Number(invoice.downPaymentAmount ?? 0);
+    const safeDownPaymentAmount = Number.isFinite(downPaymentAmount) && downPaymentAmount > 0 ? Math.round(downPaymentAmount) : 0;
+    const pendingBalance = Math.max(0, Math.round(totalAmount - safeDownPaymentAmount));
     return res.status(200).json({
         ok: true,
         pendingId: state.pending.id,
         step: meta.step,
         customerName: invoice.customerName ?? 'Cliente',
         sellerName: invoice.sellerName ?? 'Vendedor',
-        totalAmount: invoice.totalAmount,
+        totalAmount,
         date: invoice.date,
+        paymentMethod: invoice.paymentMethod ?? null,
+        creditDueDate: invoice.creditDueDate ?? null,
+        downPaymentAmount: safeDownPaymentAmount,
+        pendingBalance: invoice.showCreditBreakdown ? pendingBalance : null,
+        totalUnits,
+        saleSummary: {
+            customerName: invoice.customerName ?? 'Cliente',
+            date: invoice.date,
+            paymentMethod: invoice.paymentMethod ?? null,
+            paymentDueDate: invoice.creditDueDate ?? null,
+            totalAmount,
+            downPayment: safeDownPaymentAmount,
+            pendingBalance: invoice.showCreditBreakdown ? pendingBalance : null,
+            totalUnits,
+            products,
+        },
     });
 });
 router.post('/sign-session/:pendingId/submit', async (req, res) => {
@@ -3583,19 +4377,7 @@ router.post('/webhook', async (req, res) => {
                 const saleState = await ensurePendingState(pendingSale);
                 if (saleState && saleState.status === 'PENDING_CONFIRMATION') {
                     const action = guidedParsed.action;
-                    const mapped = action === GUIDED_ACTIONS.yes
-                        ? 'si'
-                        : action === GUIDED_ACTIONS.no
-                            ? 'no'
-                            : action === GUIDED_ACTIONS.confirm
-                                ? 'confirmar'
-                                : action === GUIDED_ACTIONS.cancel
-                                    ? 'cancelar'
-                                    : action === GUIDED_ACTIONS.unit
-                                        ? 'unitario'
-                                        : action === GUIDED_ACTIONS.total
-                                            ? 'total'
-                                            : '';
+                    const mapped = mapGuidedSaleCallbackActionToText(action);
                     if (!mapped) {
                         return res.status(200).json({ ok: true });
                     }
@@ -3759,6 +4541,37 @@ router.post('/webhook', async (req, res) => {
                 const handled = await handleGuidedInvoiceIssuerMessage(guidedInvoiceIssuer, chatId, rawText);
                 if (handled)
                     return res.status(200).json({ ok: true });
+            }
+            if (textForCommand && isSalesMetricsQuery(textForCommand)) {
+                const user = await dependencies_1.userRepository.findByTelegramId(chatId);
+                if (!user) {
+                    await telegramClient_1.TelegramClient.sendMessage({
+                        chatId,
+                        text: `No tienes un usuario asignado. Envia este ID a soporte: ${chatId}`,
+                    });
+                    return res.status(200).json({ ok: true });
+                }
+                try {
+                    const period = parseSalesMetricsPeriod(textForCommand);
+                    const summary = await getSalesMetricsSummary(user.companyId, period);
+                    const periodLabel = period.start === period.end ? period.start : `${period.start} a ${period.end}`;
+                    const topProductLine = summary.topProductQty > 0
+                        ? `🏆 Producto más vendido: ${summary.topProductName ?? 'sin dato'} (${summary.topProductQty} unidades)`
+                        : '🏆 Producto más vendido: sin ventas en el periodo';
+                    await telegramClient_1.TelegramClient.sendMessage({
+                        chatId,
+                        text: `📊 Ventas (${periodLabel})\n\n` +
+                            `🔢 Cantidad vendida: ${summary.totalUnits} unidades\n` +
+                            `${topProductLine}\n` +
+                            `💰 Ventas en dinero: ${formatCurrency(summary.totalSalesMoney)}`,
+                    });
+                    return res.status(200).json({ ok: true });
+                }
+                catch (err) {
+                    const message = err instanceof Error ? err.message : 'Error interno consultando ventas';
+                    await telegramClient_1.TelegramClient.sendMessage({ chatId, text: `No pude calcular las ventas: ${message}` });
+                    return res.status(200).json({ ok: true });
+                }
             }
             if (textForCommand && isCustomerLookupCommand(textForCommand)) {
                 const user = await dependencies_1.userRepository.findByTelegramId(chatId);

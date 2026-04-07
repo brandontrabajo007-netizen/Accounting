@@ -119,6 +119,7 @@ exports.processJournalEntry = (0, processJournalEntry_1.makeProcessJournalEntry)
 exports.inventoryGateway = {
     idGenerator: dependencies_1.idGenerator,
     listProducts: (input) => dependencies_1.productRepo.list(input),
+    listMovements: (input) => dependencies_1.movementRepo.list(input),
     listVariantsByProductId: (companyId, productId) => dependencies_1.variantRepo.listByProductId(companyId, ProductId_1.ProductId.from(productId)),
     getReservationById: (companyId, reservationId) => dependencies_1.reservationRepo.getById(companyId, reservationId),
     getProductById: (companyId, productId) => dependencies_1.productRepo.getById(companyId, ProductId_1.ProductId.from(productId)),
