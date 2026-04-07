@@ -271,6 +271,13 @@ const getBogotaCurrentMonthRange = (): DateRange => {
   return { start: toDateString(start), end: toDateString(end) }
 }
 
+const getBogotaPreviousMonthRange = (): DateRange => {
+  const today = getBogotaTodayUtc()
+  const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 1, 1))
+  const end = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0))
+  return { start: toDateString(start), end: toDateString(end) }
+}
+
 const getBogotaCurrentYearRange = (): DateRange => {
   const year = getBogotaTodayUtc().getUTCFullYear()
   const start = new Date(Date.UTC(year, 0, 1))
@@ -278,11 +285,49 @@ const getBogotaCurrentYearRange = (): DateRange => {
   return { start: toDateString(start), end: toDateString(end) }
 }
 
+const SALES_MONTH_NAME_TO_INDEX: Record<string, number> = {
+  enero: 0,
+  febrero: 1,
+  marzo: 2,
+  abril: 3,
+  mayo: 4,
+  junio: 5,
+  julio: 6,
+  agosto: 7,
+  septiembre: 8,
+  setiembre: 8,
+  octubre: 9,
+  noviembre: 10,
+  diciembre: 11,
+}
+
+const parseSalesMetricsMonthByName = (normalized: string): DateRange | null => {
+  const monthMatch = normalized.match(/\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)\b/)
+  if (!monthMatch?.[1]) return null
+
+  const monthIndex = SALES_MONTH_NAME_TO_INDEX[monthMatch[1]]
+  if (monthIndex === undefined) return null
+
+  const currentYear = getBogotaTodayUtc().getUTCFullYear()
+  const explicitYear = normalized.match(/\b(20\d{2})\b/)
+  const inferredYear = /\b(ano|año)\s+pasado\b/.test(normalized) ? currentYear - 1 : currentYear
+  const year = explicitYear?.[1] ? Number(explicitYear[1]) : inferredYear
+
+  const start = new Date(Date.UTC(year, monthIndex, 1))
+  const end = new Date(Date.UTC(year, monthIndex + 1, 0))
+  return { start: toDateString(start), end: toDateString(end) }
+}
+
 const parseSalesMetricsPeriod = (value: string): DateRange => {
+  const normalized = normalizeText(value)
+  if (/\b(mes\s+pasado|mes\s+anterior|anterior\s+mes)\b/.test(normalized)) return getBogotaPreviousMonthRange()
+
+  const monthByName = parseSalesMetricsMonthByName(normalized)
+  if (monthByName) return monthByName
+
   const parsed = TelegramAdapter.parseIncomeStatementPeriod(value)
   if (parsed) return parsed
 
-  const normalized = normalizeText(value)
   if (/\b(esta semana|semana actual|semanal)\b/.test(normalized)) return getBogotaCurrentWeekRange()
   if (/\b(este mes|mes actual|mensual)\b/.test(normalized)) return getBogotaCurrentMonthRange()
   if (/\b(este ano|este año|ano actual|año actual|anual)\b/.test(normalized)) return getBogotaCurrentYearRange()
@@ -398,20 +443,20 @@ const getSalesMetricsSummary = async (companyId: string, period: DateRange) => {
     page += 1
   }
 
-  let topProductId: string | null = null
-  let topProductQty = 0
-  for (const [productId, qty] of productQtyMap) {
-    if (qty > topProductQty) {
-      topProductId = productId
-      topProductQty = qty
-    }
-  }
+  const sortedProductQty = Array.from(productQtyMap.entries()).sort((a, b) => b[1] - a[1])
+  const productBreakdown = await Promise.all(
+    sortedProductQty.map(async ([productId, qty]) => {
+      try {
+        const product = await inventoryGateway.getProductById(companyId, productId)
+        const productName = product?.name?.trim() ? product.name.trim() : productId
+        return { productId, productName, qty }
+      } catch {
+        return { productId, productName: productId, qty }
+      }
+    }),
+  )
 
-  let topProductName: string | null = null
-  if (topProductId) {
-    const topProduct = await inventoryGateway.getProductById(companyId, topProductId)
-    topProductName = topProduct?.name ?? null
-  }
+  const topProduct = productBreakdown[0] ?? null
 
   let totalSalesMoneyFromJournal = 0
   let journalPage = 1
@@ -469,8 +514,9 @@ const getSalesMetricsSummary = async (companyId: string, period: DateRange) => {
 
   return {
     totalUnits,
-    topProductName: topProductName ?? topProductId,
-    topProductQty,
+    topProductName: topProduct?.productName ?? null,
+    topProductQty: topProduct?.qty ?? 0,
+    productBreakdown,
     totalSalesMoney: Math.round(totalSalesMoney),
   }
 }
@@ -5427,6 +5473,18 @@ router.post('/webhook', async (req: Request, res: Response) => {
             summary.topProductQty > 0
               ? `🏆 Producto más vendido: ${summary.topProductName ?? 'sin dato'} (${summary.topProductQty} unidades)`
               : '🏆 Producto más vendido: sin ventas en el periodo'
+          const otherProducts = summary.productBreakdown.slice(1)
+          const maxOtherProductsToShow = 8
+          const visibleOthers = otherProducts.slice(0, maxOtherProductsToShow)
+          const hiddenOthers = Math.max(otherProducts.length - visibleOthers.length, 0)
+          const otherProductsLine =
+            summary.topProductQty <= 0
+              ? '📦 Otros productos: sin ventas en el periodo'
+              : otherProducts.length === 0
+                ? '📦 Otros productos: no hubo más productos vendidos'
+                : `📦 Otros productos:\n${visibleOthers.map((item) => `- ${item.productName}: ${item.qty} unidades`).join('\n')}${
+                    hiddenOthers > 0 ? `\n- ... y ${hiddenOthers} producto(s) más` : ''
+                  }`
 
           await TelegramClient.sendMessage({
             chatId,
@@ -5434,6 +5492,7 @@ router.post('/webhook', async (req: Request, res: Response) => {
               `📊 Ventas (${periodLabel})\n\n` +
               `🔢 Cantidad vendida: ${summary.totalUnits} unidades\n` +
               `${topProductLine}\n` +
+              `${otherProductsLine}\n` +
               `💰 Ventas en dinero: ${formatCurrency(summary.totalSalesMoney)}`,
           })
           return res.status(200).json({ ok: true })

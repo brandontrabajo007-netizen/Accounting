@@ -1,9 +1,13 @@
 import type { Request, Response } from 'express'
-import { reservationRepo, idGenerator, validateSaleCart, confirmSale } from '../../dependencies'
+import { reservationRepo, idGenerator, validateSaleCart, confirmSale, reverseSale } from '../../dependencies'
 import { ProductId } from '../../../../domain/value-objects/ProductId'
 import { Quantity } from '../../../../domain/value-objects/Quantity'
 import { VariantId } from '../../../../domain/value-objects/VariantId'
-import { catalogCompanyQuerySchema, createReservationSchema } from '../../validation/catalogSchemas'
+import {
+  cancelReservationSchema,
+  catalogCompanyQuerySchema,
+  createReservationSchema,
+} from '../../validation/catalogSchemas'
 
 export async function createReservationHandler(req: Request, res: Response) {
   const body = createReservationSchema.parse(req.body)
@@ -72,13 +76,36 @@ export async function confirmReservationHandler(req: Request, res: Response) {
 
 export async function cancelReservationHandler(req: Request, res: Response) {
   const query = catalogCompanyQuerySchema.parse(req.query)
+  const body = cancelReservationSchema.parse(req.body ?? {})
   const { reservationId } = req.params
+
   const reservation = await reservationRepo.getById(query.companyId, reservationId)
   if (!reservation) {
     return res.status(404).json({ ok: false, error: 'ReservationNotFound' })
   }
 
+  if (reservation.status === 'CANCELLED') {
+    return res.json({ ok: true, reversed: false })
+  }
+
+  if (reservation.status === 'CONFIRMED') {
+    const reversed = await reverseSale({
+      companyId: query.companyId,
+      saleId: reservationId,
+      reason: body.reason,
+      items: reservation.items.map((item) => ({
+        productId: item.productId,
+        variantId: item.variantId,
+        qty: item.qty,
+      })),
+    })
+
+    if (!reversed.ok) {
+      return res.status(400).json({ ok: false, error: reversed.error })
+    }
+  }
+
   await reservationRepo.updateStatus(query.companyId, reservationId, 'CANCELLED')
 
-  return res.json({ ok: true })
+  return res.json({ ok: true, reversed: reservation.status === 'CONFIRMED' })
 }

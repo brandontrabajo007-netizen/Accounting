@@ -37,3 +37,7 @@ export const createReservationSchema = z.object({
     .min(1),
   ttlMinutes: z.number().int().min(1).max(1440),
 })
+
+export const cancelReservationSchema = z.object({
+  reason: z.string().min(1),
+})

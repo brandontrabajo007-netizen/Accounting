@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.createReservationSchema = exports.validateSaleSchema = exports.catalogCompanyQuerySchema = exports.catalogListQuerySchema = void 0;
+exports.cancelReservationSchema = exports.createReservationSchema = exports.validateSaleSchema = exports.catalogCompanyQuerySchema = exports.catalogListQuerySchema = void 0;
 const zod_1 = require("zod");
 exports.catalogListQuerySchema = zod_1.z.object({
     companyId: zod_1.z.string().min(1),
@@ -31,4 +31,7 @@ exports.createReservationSchema = zod_1.z.object({
     }))
         .min(1),
     ttlMinutes: zod_1.z.number().int().min(1).max(1440),
+});
+exports.cancelReservationSchema = zod_1.z.object({
+    reason: zod_1.z.string().min(1),
 });

@@ -63,11 +63,30 @@ async function confirmReservationHandler(req, res) {
 }
 async function cancelReservationHandler(req, res) {
     const query = catalogSchemas_1.catalogCompanyQuerySchema.parse(req.query);
+    const body = catalogSchemas_1.cancelReservationSchema.parse(req.body ?? {});
     const { reservationId } = req.params;
     const reservation = await dependencies_1.reservationRepo.getById(query.companyId, reservationId);
     if (!reservation) {
         return res.status(404).json({ ok: false, error: 'ReservationNotFound' });
     }
+    if (reservation.status === 'CANCELLED') {
+        return res.json({ ok: true, reversed: false });
+    }
+    if (reservation.status === 'CONFIRMED') {
+        const reversed = await (0, dependencies_1.reverseSale)({
+            companyId: query.companyId,
+            saleId: reservationId,
+            reason: body.reason,
+            items: reservation.items.map((item) => ({
+                productId: item.productId,
+                variantId: item.variantId,
+                qty: item.qty,
+            })),
+        });
+        if (!reversed.ok) {
+            return res.status(400).json({ ok: false, error: reversed.error });
+        }
+    }
     await dependencies_1.reservationRepo.updateStatus(query.companyId, reservationId, 'CANCELLED');
-    return res.json({ ok: true });
+    return res.json({ ok: true, reversed: reservation.status === 'CONFIRMED' });
 }
