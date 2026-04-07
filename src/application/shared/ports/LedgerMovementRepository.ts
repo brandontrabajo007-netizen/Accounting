@@ -20,4 +20,13 @@ export type LedgerMovementList = {
 export interface LedgerMovementRepository {
   findByAccount(params: LedgerMovementFilters & { page: number; limit: number }): Promise<LedgerMovementList>
   sumBefore(params: LedgerMovementFilters & { before: Date }): Promise<{ debit: number; credit: number }>
+  sumBeforeCursor(
+    params: LedgerMovementFilters & {
+      cursor: {
+        date: Date
+        createdAt: Date
+        id: string
+      }
+    },
+  ): Promise<{ debit: number; credit: number }>
 }

@@ -47,27 +47,56 @@ export const makeListAccountMovements = ({ ledgerMovementRepository, accountRepo
     const increaseIsDebit = account.type === AccountType.ASSET || account.type === AccountType.EXPENSE
     const net = (debit: number, credit: number) => (increaseIsDebit ? debit - credit : credit - debit)
 
-    const [list, opening] = await Promise.all([
-      ledgerMovementRepository.findByAccount({
+    const list = await ledgerMovementRepository.findByAccount({
+      companyId,
+      accountCode,
+      periodId,
+      from: clampedFrom,
+      to: clampedTo,
+      page: safePage,
+      limit: safeLimit,
+    })
+
+    let openingBeforeRange = { debit: 0, credit: 0 }
+    if (includeRunningBalance && clampedFrom) {
+      openingBeforeRange = await ledgerMovementRepository.sumBefore({
         companyId,
         accountCode,
         periodId,
         from: clampedFrom,
         to: clampedTo,
-        page: safePage,
-        limit: safeLimit,
-      }),
-      includeRunningBalance && clampedFrom
-        ? ledgerMovementRepository.sumBefore({
-            companyId,
-            accountCode,
-            periodId,
-            from: clampedFrom,
-            to: clampedTo,
-            before: clampedFrom,
-          })
-        : { debit: 0, credit: 0 },
-    ])
+        before: clampedFrom,
+      })
+    }
+
+    let opening = openingBeforeRange
+    if (includeRunningBalance && safePage > 1) {
+      const firstMovement = list.items[0]
+      if (firstMovement) {
+        const beforeCurrentPage = await ledgerMovementRepository.sumBeforeCursor({
+          companyId,
+          accountCode,
+          periodId,
+          from: clampedFrom,
+          to: clampedTo,
+          cursor: {
+            date: firstMovement.date,
+            createdAt: firstMovement.createdAt ?? firstMovement.date,
+            id: firstMovement.id,
+          },
+        })
+        opening = {
+          debit: openingBeforeRange.debit + beforeCurrentPage.debit,
+          credit: openingBeforeRange.credit + beforeCurrentPage.credit,
+        }
+      } else if (list.total > 0) {
+        // Si la página quedó fuera de rango, tomamos el acumulado total del rango filtrado.
+        opening = {
+          debit: openingBeforeRange.debit + list.totals.debit,
+          credit: openingBeforeRange.credit + list.totals.credit,
+        }
+      }
+    }
 
     const initialBalance = includeRunningBalance ? net(opening.debit, opening.credit) : 0
     let runningBalance = initialBalance
@@ -84,7 +113,10 @@ export const makeListAccountMovements = ({ ledgerMovementRepository, accountRepo
       }
     })
 
-    const finalBalance = includeRunningBalance ? runningBalance : undefined
+    const pageFinalBalance = includeRunningBalance ? runningBalance : undefined
+    const finalBalance = includeRunningBalance
+      ? net(openingBeforeRange.debit + list.totals.debit, openingBeforeRange.credit + list.totals.credit)
+      : undefined
 
     return {
       account: {
@@ -105,6 +137,7 @@ export const makeListAccountMovements = ({ ledgerMovementRepository, accountRepo
       },
       totals: list.totals,
       initialBalance,
+      pageFinalBalance,
       finalBalance,
       items,
     }

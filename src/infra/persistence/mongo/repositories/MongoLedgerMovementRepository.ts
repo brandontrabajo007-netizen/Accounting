@@ -1,5 +1,6 @@
 import type { LedgerMovementRepository, LedgerMovementFilters, LedgerMovementList } from '@application/shared/ports/LedgerMovementRepository'
 import type { LedgerMovement } from '@domain/ledger/LedgerMovement'
+import mongoose from 'mongoose'
 import { LedgerMovementMongoModel } from '../models/LedgerMovementModel'
 
 const toDomain = (doc: any): LedgerMovement => ({
@@ -30,6 +31,15 @@ const buildFilter = ({ companyId, accountCode, periodId, from, to }: LedgerMovem
 const emptyTotals = { debit: 0, credit: 0 }
 
 export class MongoLedgerMovementRepository implements LedgerMovementRepository {
+  private async aggregateTotals(filter: Record<string, unknown>): Promise<{ debit: number; credit: number }> {
+    const [agg] = await LedgerMovementMongoModel.aggregate([
+      { $match: filter },
+      { $group: { _id: null, debit: { $sum: '$debit' }, credit: { $sum: '$credit' } } },
+    ])
+
+    return agg ? { debit: agg.debit ?? 0, credit: agg.credit ?? 0 } : emptyTotals
+  }
+
   async findByAccount(params: LedgerMovementFilters & { page: number; limit: number }): Promise<LedgerMovementList> {
     const { page, limit } = params
     const skip = (page - 1) * limit
@@ -58,11 +68,35 @@ export class MongoLedgerMovementRepository implements LedgerMovementRepository {
     const filter = buildFilter({ companyId, accountCode, periodId })
     filter.date = { $lt: before }
 
-    const [agg] = await LedgerMovementMongoModel.aggregate([
-      { $match: filter },
-      { $group: { _id: null, debit: { $sum: '$debit' }, credit: { $sum: '$credit' } } },
-    ])
+    return this.aggregateTotals(filter)
+  }
 
-    return agg ? { debit: agg.debit ?? 0, credit: agg.credit ?? 0 } : emptyTotals
+  async sumBeforeCursor(
+    params: LedgerMovementFilters & {
+      cursor: {
+        date: Date
+        createdAt: Date
+        id: string
+      }
+    },
+  ): Promise<{ debit: number; credit: number }> {
+    const filter = buildFilter(params)
+    const { date, createdAt, id } = params.cursor
+
+    const cursorFilter: Array<Record<string, unknown>> = [
+      { date: { $lt: date } },
+      { date, createdAt: { $lt: createdAt } },
+    ]
+
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      cursorFilter.push({
+        date,
+        createdAt,
+        _id: { $lt: new mongoose.Types.ObjectId(id) },
+      })
+    }
+
+    filter.$or = cursorFilter
+    return this.aggregateTotals(filter)
   }
 }

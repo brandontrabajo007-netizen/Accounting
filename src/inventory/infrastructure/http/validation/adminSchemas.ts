@@ -1,5 +1,15 @@
 import { z } from 'zod'
 
+const dateOnlyPattern = /^\d{4}-\d{2}-\d{2}$/
+
+const dateFilterSchema = z.string().trim().refine((value) => {
+  if (dateOnlyPattern.test(value)) {
+    return !Number.isNaN(new Date(`${value}T00:00:00.000Z`).getTime())
+  }
+
+  return !Number.isNaN(new Date(value).getTime())
+}, 'Use YYYY-MM-DD or ISO datetime')
+
 export const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(200).default(20),
@@ -51,8 +61,8 @@ export const listMovementsQuerySchema = z
     productId: z.string().min(1).optional(),
     variantId: z.string().min(1).optional(),
     type: z.enum(['IN', 'OUT', 'ADJUST']).optional(),
-    from: z.string().datetime().optional(),
-    to: z.string().datetime().optional(),
+    from: dateFilterSchema.optional(),
+    to: dateFilterSchema.optional(),
   })
   .merge(paginationSchema)
 

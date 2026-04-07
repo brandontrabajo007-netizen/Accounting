@@ -138,6 +138,7 @@ export const processJournalEntry = makeProcessJournalEntry(journalEntryRepositor
 export const inventoryGateway = {
   idGenerator: inventoryIdGenerator,
   listProducts: (input: Parameters<typeof inventoryProductRepo.list>[0]) => inventoryProductRepo.list(input),
+  listMovements: (input: Parameters<typeof inventoryMovementRepo.list>[0]) => inventoryMovementRepo.list(input),
   listVariantsByProductId: (companyId: string, productId: string) =>
     inventoryVariantRepo.listByProductId(companyId, ProductId.from(productId)),
   getReservationById: (companyId: string, reservationId: string) =>

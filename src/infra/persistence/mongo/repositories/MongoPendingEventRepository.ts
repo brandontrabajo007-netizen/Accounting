@@ -47,6 +47,42 @@ export class MongoPendingEventRepository implements PendingEventRepository {
     return doc ? toDomain(doc as PendingEventDocument) : null
   }
 
+  async listByCompany(params: {
+    companyId: string
+    eventType?: PendingEvent['eventType']
+    statuses?: PendingEventStatus[]
+    from?: Date
+    to?: Date
+    page: number
+    limit: number
+  }): Promise<{ items: PendingEvent[]; total: number }> {
+    const page = Number.isFinite(params.page) && params.page > 0 ? Math.floor(params.page) : 1
+    const limit = Number.isFinite(params.limit) && params.limit > 0 ? Math.floor(params.limit) : 100
+    const skip = (page - 1) * limit
+
+    const query: Record<string, unknown> = { companyId: params.companyId }
+    if (params.eventType) query.eventType = params.eventType
+    if (params.statuses && params.statuses.length > 0) {
+      query.status = { $in: params.statuses }
+    }
+    if (params.from || params.to) {
+      const createdAt: { $gte?: Date; $lte?: Date } = {}
+      if (params.from) createdAt.$gte = params.from
+      if (params.to) createdAt.$lte = params.to
+      query.createdAt = createdAt
+    }
+
+    const [docs, total] = await Promise.all([
+      PendingEventMongoModel.find(query).sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit).lean(),
+      PendingEventMongoModel.countDocuments(query),
+    ])
+
+    return {
+      items: docs.map((doc) => toDomain(doc as PendingEventDocument)),
+      total,
+    }
+  }
+
   async findLatestPendingByTelegramUserId(
     telegramUserId: number,
     eventType?: PendingEvent['eventType'],
