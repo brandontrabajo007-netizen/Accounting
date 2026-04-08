@@ -1,6 +1,7 @@
 import type { MovementRepo } from '../ports/MovementRepo'
 import type { ProductRepo } from '../ports/ProductRepo'
 import type { VariantRepo } from '../ports/VariantRepo'
+import type { InventorySettingsRepo } from '../ports/InventorySettingsRepo'
 import type { IdGenerator } from '../types/IdGenerator'
 import { Result } from '../types/Result'
 import type { Result as ResultType } from '../types/Result'
@@ -12,11 +13,13 @@ import type { VariantNotFound } from '../../domain/errors/VariantNotFound'
 import type { InvalidQuantity } from '../../domain/errors/InvalidQuantity'
 import type { InactiveProductOrVariant } from '../../domain/errors/InactiveProductOrVariant'
 import type { InventoryMovement } from '../../domain/entities/InventoryMovement'
+import { resolveInventoryMode } from '../services/resolveInventoryMode'
+import { ensureSimpleDefaultVariant } from '../services/ensureSimpleDefaultVariant'
 
 export type ReverseSaleCommand = Readonly<{
   companyId: string
   saleId: string
-  items: ReadonlyArray<{ productId: string; variantId: string; qty: number }>
+  items: ReadonlyArray<{ productId: string; variantId?: string; qty: number }>
   reason: string
 }>
 
@@ -26,7 +29,13 @@ export type ReverseSaleResult = Readonly<{
 }>
 
 export function makeReverseSale(
-  deps: Readonly<{ productRepo: ProductRepo; variantRepo: VariantRepo; movementRepo: MovementRepo; idGenerator: IdGenerator }>,
+  deps: Readonly<{
+    productRepo: ProductRepo
+    variantRepo: VariantRepo
+    movementRepo: MovementRepo
+    inventorySettingsRepo: InventorySettingsRepo
+    idGenerator: IdGenerator
+  }>,
 ) {
   return async function reverseSale(
     command: ReverseSaleCommand,
@@ -40,6 +49,45 @@ export function makeReverseSale(
 
     const now = new Date()
     const movements: InventoryMovement[] = []
+    const mode = await resolveInventoryMode(deps.inventorySettingsRepo, command.companyId)
+
+    if (mode === 'SIMPLE') {
+      const qtyByProduct = new Map<string, number>()
+      for (const item of command.items) {
+        if (item.qty <= 0) {
+          return Result.err({ type: 'InvalidQuantity', message: 'qty must be > 0' })
+        }
+        qtyByProduct.set(item.productId, (qtyByProduct.get(item.productId) ?? 0) + item.qty)
+      }
+
+      for (const [productId, qty] of qtyByProduct.entries()) {
+        const product = await deps.productRepo.getById(command.companyId, ProductId.from(productId))
+        if (!product) {
+          return Result.err({ type: 'ProductNotFound', productId })
+        }
+        if (!product.active) {
+          return Result.err({ type: 'InactiveProductOrVariant', productId })
+        }
+
+        const variant = await ensureSimpleDefaultVariant(deps, { companyId: command.companyId, product })
+        movements.push({
+          id: deps.idGenerator(),
+          companyId: command.companyId,
+          productId: ProductId.from(productId),
+          variantId: variant.id,
+          type: 'IN',
+          qty: Quantity.from(qty),
+          occurredAt: now,
+          reference: { type: 'REVERSAL', id: command.saleId },
+          batchId: command.saleId,
+          note: command.reason,
+          createdAt: now,
+        })
+      }
+
+      await deps.movementRepo.addMany(movements)
+      return Result.ok({ ok: true, movementBatchId: command.saleId })
+    }
 
     for (const item of command.items) {
       if (item.qty <= 0) {
@@ -52,6 +100,10 @@ export function makeReverseSale(
       }
       if (!product.active) {
         return Result.err({ type: 'InactiveProductOrVariant', productId: item.productId })
+      }
+
+      if (!item.variantId) {
+        return Result.err({ type: 'VariantNotFound', variantId: item.productId })
       }
 
       const variant = await deps.variantRepo.getById(command.companyId, VariantId.from(item.variantId))

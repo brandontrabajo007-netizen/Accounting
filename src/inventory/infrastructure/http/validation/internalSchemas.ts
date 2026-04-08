@@ -7,7 +7,7 @@ export const internalCostSchema = z.object({
     .array(
       z.object({
         productId: z.string().min(1),
-        variantId: z.string().min(1),
+        variantId: z.string().min(1).optional(),
         qty: z.number().int().positive(),
       }),
     )
@@ -22,7 +22,7 @@ export const internalConfirmSchema = z.object({
     .array(
       z.object({
         productId: z.string().min(1),
-        variantId: z.string().min(1),
+        variantId: z.string().min(1).optional(),
         qty: z.number().int().positive(),
       }),
     )
@@ -37,7 +37,7 @@ export const internalReverseSchema = z.object({
     .array(
       z.object({
         productId: z.string().min(1),
-        variantId: z.string().min(1),
+        variantId: z.string().min(1).optional(),
         qty: z.number().int().positive(),
       }),
     )

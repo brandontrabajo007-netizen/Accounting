@@ -143,6 +143,11 @@ export class MongoMovementRepo implements MovementRepo {
     return docs.map(toDomain)
   }
 
+  async listByProduct(companyId: string, productId: ProductId): Promise<ReadonlyArray<InventoryMovement>> {
+    const docs = await MovementModel.find({ companyId, productId }).lean().exec()
+    return docs.map(toDomain)
+  }
+
   async listByVariant(companyId: string, variantId: VariantId): Promise<ReadonlyArray<InventoryMovement>> {
     const docs = await MovementModel.find({ companyId, variantId }).lean().exec()
     return docs.map(toDomain)
@@ -151,5 +156,10 @@ export class MongoMovementRepo implements MovementRepo {
   async existsByVariant(companyId: string, variantId: VariantId): Promise<boolean> {
     const doc = await MovementModel.findOne({ companyId, variantId }).select({ _id: 1 }).lean().exec()
     return !!doc
+  }
+
+  async existsByCompany(companyId: string): Promise<boolean> {
+    const doc = await MovementModel.findOne({ companyId }).select({ _id: 1 }).lean().exec()
+    return Boolean(doc)
   }
 }

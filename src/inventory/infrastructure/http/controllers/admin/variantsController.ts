@@ -1,11 +1,18 @@
 import type { Request, Response } from 'express'
-import { createVariant, updateVariant, deactivateVariant, deleteVariant, variantRepo } from '../../dependencies'
+import { createVariant, updateVariant, deactivateVariant, deleteVariant, variantRepo, getInventorySettings } from '../../dependencies'
 import { createVariantSchema, updateVariantSchema } from '../../validation/adminSchemas'
 import { serializeVariant } from '../../serializers/variantSerializers'
 import { ProductId } from '../../../../domain/value-objects/ProductId'
 
+const simpleModeError = { type: 'InventoryModeViolation', mode: 'SIMPLE', operation: 'VARIANT_MANAGEMENT' } as const
+
 export async function createVariantHandler(req: Request, res: Response) {
   const companyId = req.user!.companyId
+  const settings = await getInventorySettings({ companyId })
+  if (settings.mode === 'SIMPLE') {
+    return res.status(409).json({ ok: false, error: simpleModeError })
+  }
+
   const { productId } = req.params
   const body = createVariantSchema.parse(req.body)
   const result = await createVariant({
@@ -26,13 +33,23 @@ export async function createVariantHandler(req: Request, res: Response) {
 
 export async function listVariantsHandler(req: Request, res: Response) {
   const companyId = req.user!.companyId
+  const settings = await getInventorySettings({ companyId })
+  if (settings.mode === 'SIMPLE') {
+    return res.json({ items: [] })
+  }
+
   const { productId } = req.params
   const variants = await variantRepo.listByProductId(companyId, ProductId.from(productId))
-  return res.json({ items: variants.map(serializeVariant) })
+  return res.json({ items: variants.filter((variant) => variant.systemType !== 'SIMPLE_DEFAULT').map(serializeVariant) })
 }
 
 export async function updateVariantHandler(req: Request, res: Response) {
   const companyId = req.user!.companyId
+  const settings = await getInventorySettings({ companyId })
+  if (settings.mode === 'SIMPLE') {
+    return res.status(409).json({ ok: false, error: simpleModeError })
+  }
+
   const { variantId } = req.params
   const body = updateVariantSchema.parse(req.body)
   const result = await updateVariant({ companyId, variantId, ...body })
@@ -46,6 +63,11 @@ export async function updateVariantHandler(req: Request, res: Response) {
 
 export async function deleteVariantHandler(req: Request, res: Response) {
   const companyId = req.user!.companyId
+  const settings = await getInventorySettings({ companyId })
+  if (settings.mode === 'SIMPLE') {
+    return res.status(409).json({ ok: false, error: simpleModeError })
+  }
+
   const { variantId } = req.params
   const result = await deactivateVariant({ companyId, variantId })
 
@@ -58,6 +80,11 @@ export async function deleteVariantHandler(req: Request, res: Response) {
 
 export async function deleteVariantHardHandler(req: Request, res: Response) {
   const companyId = req.user!.companyId
+  const settings = await getInventorySettings({ companyId })
+  if (settings.mode === 'SIMPLE') {
+    return res.status(409).json({ ok: false, error: simpleModeError })
+  }
+
   const { variantId } = req.params
   const result = await deleteVariant({ companyId, variantId })
 

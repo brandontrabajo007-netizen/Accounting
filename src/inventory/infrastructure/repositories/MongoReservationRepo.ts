@@ -63,4 +63,32 @@ export class MongoReservationRepo implements ReservationRepo {
 
     return total
   }
+
+  async listActiveQtyByProduct(companyId: string, productId: ProductId): Promise<number> {
+    const now = new Date()
+    const docs = await ReservationModel.find({
+      companyId,
+      status: 'ACTIVE',
+      expiresAt: { $gt: now },
+      'items.productId': productId,
+    })
+      .lean()
+      .exec()
+
+    let total = 0
+    for (const doc of docs) {
+      for (const item of doc.items) {
+        if (item.productId === productId) {
+          total += item.qty
+        }
+      }
+    }
+
+    return total
+  }
+
+  async existsByCompany(companyId: string): Promise<boolean> {
+    const doc = await ReservationModel.findOne({ companyId }).select({ _id: 1 }).lean().exec()
+    return Boolean(doc)
+  }
 }

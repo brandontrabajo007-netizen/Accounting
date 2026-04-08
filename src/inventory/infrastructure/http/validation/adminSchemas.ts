@@ -51,6 +51,10 @@ export const updateVariantSchema = z.object({
   active: z.boolean().optional(),
 })
 
+export const updateInventorySettingsSchema = z.object({
+  mode: z.enum(['SIMPLE', 'VARIANT']),
+})
+
 export const stockQuerySchema = z.object({
   productId: z.string().min(1).optional(),
   variantId: z.string().min(1).optional(),
@@ -82,9 +86,6 @@ export const registerReceiptSchema = z.object({
           .optional(),
         qty: z.number().int().positive(),
         unitCost: z.number().min(0).optional(),
-      }).refine((item) => item.variantId || item.variant, {
-        message: 'variantId or variant is required',
-        path: ['variantId'],
       }),
     )
     .min(1),
@@ -96,7 +97,7 @@ export const registerAdjustmentSchema = z.object({
     .array(
       z.object({
         productId: z.string().min(1),
-        variantId: z.string().min(1),
+        variantId: z.string().min(1).optional(),
         qtyDelta: z.number().int().refine((value) => value !== 0, 'qtyDelta must be != 0'),
       }),
     )

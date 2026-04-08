@@ -31,6 +31,8 @@ export interface MovementRepo {
     productId: ProductId,
     variantId: VariantId,
   ): Promise<ReadonlyArray<InventoryMovement>>
+  listByProduct(companyId: string, productId: ProductId): Promise<ReadonlyArray<InventoryMovement>>
   listByVariant(companyId: string, variantId: VariantId): Promise<ReadonlyArray<InventoryMovement>>
   existsByVariant(companyId: string, variantId: VariantId): Promise<boolean>
+  existsByCompany(companyId: string): Promise<boolean>
 }

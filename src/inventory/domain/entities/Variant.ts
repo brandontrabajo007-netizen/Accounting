@@ -9,6 +9,7 @@ export type Variant = Readonly<{
   attribute: string
   value: string
   skuVariant?: Sku
+  systemType?: 'SIMPLE_DEFAULT'
   active: boolean
   createdAt: Date
   updatedAt: Date

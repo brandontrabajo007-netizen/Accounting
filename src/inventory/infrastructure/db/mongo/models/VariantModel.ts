@@ -7,6 +7,7 @@ export type VariantDoc = {
   attribute: string
   value: string
   skuVariant?: string
+  systemType?: 'SIMPLE_DEFAULT'
   active: boolean
   createdAt: Date
   updatedAt: Date
@@ -20,6 +21,7 @@ const VariantSchema = new mongoose.Schema<VariantDoc>(
     attribute: { type: String, required: true },
     value: { type: String, required: true },
     skuVariant: { type: String, required: false },
+    systemType: { type: String, enum: ['SIMPLE_DEFAULT'], required: false, index: true },
     active: { type: Boolean, required: true },
     createdAt: { type: Date, required: true },
     updatedAt: { type: Date, required: true },

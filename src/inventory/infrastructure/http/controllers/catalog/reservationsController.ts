@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express'
-import { reservationRepo, idGenerator, validateSaleCart, confirmSale, reverseSale } from '../../dependencies'
+import { reservationRepo, idGenerator, validateSaleCart, confirmSale, reverseSale, getInventorySettings } from '../../dependencies'
 import { ProductId } from '../../../../domain/value-objects/ProductId'
 import { Quantity } from '../../../../domain/value-objects/Quantity'
 import { VariantId } from '../../../../domain/value-objects/VariantId'
@@ -11,6 +11,10 @@ import {
 
 export async function createReservationHandler(req: Request, res: Response) {
   const body = createReservationSchema.parse(req.body)
+  const settings = await getInventorySettings({ companyId: body.companyId })
+  if (settings.mode === 'VARIANT' && body.items.some((item) => !item.variantId)) {
+    return res.status(400).json({ ok: false, error: 'variantId is required in VARIANT mode' })
+  }
 
   const validation = await validateSaleCart({ companyId: body.companyId, items: body.items })
   if (!validation.ok || !validation.value.ok) {
@@ -23,7 +27,7 @@ export async function createReservationHandler(req: Request, res: Response) {
 
   const items = body.items.map((item) => ({
     productId: ProductId.from(item.productId),
-    variantId: VariantId.from(item.variantId),
+    variantId: VariantId.from(item.variantId ?? item.productId),
     qty: Quantity.from(item.qty),
   }))
 

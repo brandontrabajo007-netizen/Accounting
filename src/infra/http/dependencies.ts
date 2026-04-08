@@ -43,6 +43,7 @@ import { MongoApSupplierRepository } from '@accounts-payable/infrastructure/pers
 import { ProductId } from '@inventory/domain/value-objects/ProductId'
 import {
   confirmSale as inventoryConfirmSale,
+  getInventorySettings as inventoryGetInventorySettings,
   getSaleCost as inventoryGetSaleCost,
   idGenerator as inventoryIdGenerator,
   movementRepo as inventoryMovementRepo,
@@ -137,6 +138,7 @@ export const processJournalEntry = makeProcessJournalEntry(journalEntryRepositor
 
 export const inventoryGateway = {
   idGenerator: inventoryIdGenerator,
+  getInventoryMode: async (companyId: string) => (await inventoryGetInventorySettings({ companyId })).mode,
   listProducts: (input: Parameters<typeof inventoryProductRepo.list>[0]) => inventoryProductRepo.list(input),
   listMovements: (input: Parameters<typeof inventoryMovementRepo.list>[0]) => inventoryMovementRepo.list(input),
   listVariantsByProductId: (companyId: string, productId: string) =>

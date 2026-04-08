@@ -9,7 +9,7 @@ import { computeCostFixed } from '../../domain/services/computeCostFixed'
 
 export type SaleItem = Readonly<{
   productId: string
-  variantId: string
+  variantId?: string
   qty: number
 }>
 

@@ -12,6 +12,7 @@ type VariantDoc = {
   attribute: string
   value: string
   skuVariant?: string
+  systemType?: 'SIMPLE_DEFAULT'
   active: boolean
   createdAt: Date
   updatedAt: Date
@@ -92,6 +93,7 @@ function toDomain(doc: VariantDoc): Variant {
     attribute: doc.attribute,
     value: doc.value,
     skuVariant: doc.skuVariant ? Sku.from(doc.skuVariant) : undefined,
+    systemType: doc.systemType,
     active: doc.active,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
@@ -108,6 +110,35 @@ export class MongoVariantRepo implements VariantRepo {
     const docs = (await VariantModel.find({ companyId, productId }).lean().exec()) as VariantDoc[]
     docs.sort(compareVariantDocs)
     return docs.map(toDomain)
+  }
+
+  async listByCompanyId(companyId: string): Promise<ReadonlyArray<Variant>> {
+    const docs = (await VariantModel.find({ companyId }).lean().exec()) as VariantDoc[]
+    docs.sort(compareVariantDocs)
+    return docs.map(toDomain)
+  }
+
+  async getSimpleDefaultByProductId(companyId: string, productId: ProductId): Promise<Variant | null> {
+    const doc = await VariantModel.findOne({
+      companyId,
+      productId,
+      systemType: 'SIMPLE_DEFAULT',
+    })
+      .lean()
+      .exec()
+
+    return doc ? toDomain(doc) : null
+  }
+
+  async existsUserManagedByCompany(companyId: string): Promise<boolean> {
+    const doc = await VariantModel.findOne({
+      companyId,
+      systemType: { $ne: 'SIMPLE_DEFAULT' },
+    })
+      .select({ _id: 1 })
+      .lean()
+      .exec()
+    return Boolean(doc)
   }
 
   async getByProductAndAttributeValue(
@@ -128,6 +159,7 @@ export class MongoVariantRepo implements VariantRepo {
       attribute: variant.attribute,
       value: variant.value,
       skuVariant: variant.skuVariant,
+      systemType: variant.systemType,
       active: variant.active,
       createdAt: variant.createdAt,
       updatedAt: variant.updatedAt,
@@ -142,6 +174,7 @@ export class MongoVariantRepo implements VariantRepo {
           attribute: variant.attribute,
           value: variant.value,
           skuVariant: variant.skuVariant,
+          systemType: variant.systemType,
           active: variant.active,
           updatedAt: variant.updatedAt,
         },

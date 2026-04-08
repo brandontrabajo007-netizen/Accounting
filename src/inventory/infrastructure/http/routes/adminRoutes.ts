@@ -16,11 +16,15 @@ import {
 import { listMovementsHandler } from '../controllers/admin/movementsController'
 import { registerReceiptHandler } from '../controllers/admin/receiptsController'
 import { registerAdjustmentHandler } from '../controllers/admin/adjustmentsController'
+import { getInventorySettingsHandler, updateInventorySettingsHandler } from '../controllers/admin/settingsController'
 import { requireInventoryAuth } from '../middleware/requireInventoryAuth'
 
 const router = express.Router()
 
 router.use(requireInventoryAuth)
+
+router.get('/settings', getInventorySettingsHandler)
+router.patch('/settings', updateInventorySettingsHandler)
 
 router.post('/products', createProductHandler)
 router.get('/products', listProductsHandler)
