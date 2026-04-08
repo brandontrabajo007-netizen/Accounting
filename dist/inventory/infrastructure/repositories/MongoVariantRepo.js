@@ -79,6 +79,7 @@ function toDomain(doc) {
         attribute: doc.attribute,
         value: doc.value,
         skuVariant: doc.skuVariant ? Sku_1.Sku.from(doc.skuVariant) : undefined,
+        systemType: doc.systemType,
         active: doc.active,
         createdAt: doc.createdAt,
         updatedAt: doc.updatedAt,
@@ -94,6 +95,31 @@ class MongoVariantRepo {
         docs.sort(compareVariantDocs);
         return docs.map(toDomain);
     }
+    async listByCompanyId(companyId) {
+        const docs = (await VariantModel_1.VariantModel.find({ companyId }).lean().exec());
+        docs.sort(compareVariantDocs);
+        return docs.map(toDomain);
+    }
+    async getSimpleDefaultByProductId(companyId, productId) {
+        const doc = await VariantModel_1.VariantModel.findOne({
+            companyId,
+            productId,
+            systemType: 'SIMPLE_DEFAULT',
+        })
+            .lean()
+            .exec();
+        return doc ? toDomain(doc) : null;
+    }
+    async existsUserManagedByCompany(companyId) {
+        const doc = await VariantModel_1.VariantModel.findOne({
+            companyId,
+            systemType: { $ne: 'SIMPLE_DEFAULT' },
+        })
+            .select({ _id: 1 })
+            .lean()
+            .exec();
+        return Boolean(doc);
+    }
     async getByProductAndAttributeValue(companyId, productId, attribute, value) {
         const doc = await VariantModel_1.VariantModel.findOne({ companyId, productId, attribute, value }).lean().exec();
         return doc ? toDomain(doc) : null;
@@ -106,6 +132,7 @@ class MongoVariantRepo {
             attribute: variant.attribute,
             value: variant.value,
             skuVariant: variant.skuVariant,
+            systemType: variant.systemType,
             active: variant.active,
             createdAt: variant.createdAt,
             updatedAt: variant.updatedAt,
@@ -117,6 +144,7 @@ class MongoVariantRepo {
                 attribute: variant.attribute,
                 value: variant.value,
                 skuVariant: variant.skuVariant,
+                systemType: variant.systemType,
                 active: variant.active,
                 updatedAt: variant.updatedAt,
             },

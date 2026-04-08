@@ -6,7 +6,7 @@ export function serializeMovement(movement: InventoryMovement) {
     productId: movement.productId,
     variantId: movement.variantId,
     type: movement.type,
-    qty: movement.type === 'ADJUST' ? undefined : movement.qty,
+    qty: movement.type === 'ADJUST' ? movement.qtyDelta : movement.qty,
     qtyDelta: movement.type === 'ADJUST' ? movement.qtyDelta : undefined,
     occurredAt: movement.occurredAt,
     reference: movement.reference,

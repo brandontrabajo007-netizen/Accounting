@@ -16,7 +16,7 @@ exports.validateSaleSchema = zod_1.z.object({
     items: zod_1.z
         .array(zod_1.z.object({
         productId: zod_1.z.string().min(1),
-        variantId: zod_1.z.string().min(1),
+        variantId: zod_1.z.string().min(1).optional(),
         qty: zod_1.z.number().int().positive(),
     }))
         .min(1),
@@ -26,7 +26,7 @@ exports.createReservationSchema = zod_1.z.object({
     items: zod_1.z
         .array(zod_1.z.object({
         productId: zod_1.z.string().min(1),
-        variantId: zod_1.z.string().min(1),
+        variantId: zod_1.z.string().min(1).optional(),
         qty: zod_1.z.number().int().positive(),
     }))
         .min(1),

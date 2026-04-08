@@ -656,6 +656,9 @@ const normalizeOptionalField = (value) => {
         return null;
     return cleaned;
 };
+const SIMPLE_GUIDED_VARIANT_ID = '__simple__';
+const SIMPLE_GUIDED_VARIANT_ATTRIBUTE = 'presentacion';
+const SIMPLE_GUIDED_VARIANT_VALUE = 'general';
 const isGuidedSaleCommand = (value) => {
     const text = normalizeText(value);
     return /\b(venta guiada|registrar venta|nueva venta|crear venta|registrar una venta|guiame con una venta|guiame una venta|gu[ií]ame con una venta)\b/.test(text);
@@ -1366,6 +1369,7 @@ const getGuidedSaleState = (pending) => {
     };
     const meta = {
         step: rawMeta.step ?? 'customer',
+        inventoryMode: rawMeta.inventoryMode === 'SIMPLE' || rawMeta.inventoryMode === 'VARIANT' ? rawMeta.inventoryMode : undefined,
         candidateProducts: Array.isArray(rawMeta.candidateProducts)
             ? rawMeta.candidateProducts.map((item) => ({
                 id: String(item.id ?? ''),
@@ -1432,6 +1436,40 @@ const askGuidedSaleProduct = async (chatId) => {
         chatId,
         text: '¿Qué producto vendiste? Escribe el nombre o una parte del nombre.',
     });
+};
+const isSimpleGuidedSale = (meta) => meta.inventoryMode === 'SIMPLE';
+const shouldBypassGuidedAddMore = (meta) => meta.skipAddMore === true || (meta.fastMode === true && !isSimpleGuidedSale(meta));
+const buildSimpleGuidedVariant = (qty, unitPrice = null) => ({
+    variantId: SIMPLE_GUIDED_VARIANT_ID,
+    attribute: SIMPLE_GUIDED_VARIANT_ATTRIBUTE,
+    value: SIMPLE_GUIDED_VARIANT_VALUE,
+    qty,
+    unitPrice,
+});
+const isSimpleGuidedVariant = (variant) => variant.variantId === SIMPLE_GUIDED_VARIANT_ID ||
+    (normalizeText(variant.attribute) === SIMPLE_GUIDED_VARIANT_ATTRIBUTE && normalizeText(variant.value) === SIMPLE_GUIDED_VARIANT_VALUE);
+const askGuidedSaleQuantity = async (chatId, productName, suggestedQty) => {
+    const suggestion = suggestedQty && suggestedQty > 0
+        ? `\nCantidad detectada: ${Math.round(suggestedQty)}. Puedes confirmarla o escribir otra.`
+        : '';
+    await telegramClient_1.TelegramClient.sendMessage({
+        chatId,
+        text: `📦 *${productName}*\n` +
+            '¿Cuántas unidades vendiste?\n' +
+            'Escribe solo el número. Ejemplo: `12`' +
+            suggestion,
+        parseMode: 'Markdown',
+    });
+};
+const moveGuidedSaleToQuantityStep = async (pendingId, chatId, data, meta, productId, productName) => {
+    meta.currentProductId = productId;
+    meta.currentProductName = productName;
+    meta.candidateVariants = undefined;
+    meta.candidateProducts = undefined;
+    clearGuidedVariantWizard(meta);
+    meta.step = 'quantity';
+    await updateGuidedSaleState(pendingId, data, meta);
+    await askGuidedSaleQuantity(chatId, productName, meta.pendingTotalQty ?? null);
 };
 const askGuidedSaleVariants = async (chatId, productName, variants, totalQty) => {
     const list = variants.map((variant, index) => `${index + 1}) ${variant.attribute} ${variant.value}`).join('\n');
@@ -1567,7 +1605,7 @@ const buildGuidedSaleSummary = (data, totalAmount) => {
             }
             else {
                 item.variants.forEach((variant) => {
-                    const variantLabel = `${variant.attribute} ${variant.value}`.trim();
+                    const variantLabel = isSimpleGuidedVariant(variant) ? 'Unidades' : `${variant.attribute} ${variant.value}`.trim();
                     const unitPrice = variant.unitPrice && variant.unitPrice > 0 ? Math.round(variant.unitPrice) : 0;
                     const lineTotal = unitPrice > 0 ? unitPrice * variant.qty : 0;
                     productSubtotal += lineTotal;
@@ -1719,14 +1757,16 @@ const formatInventoryConfirmErrorMessage = (data, error) => {
     const variant = error.variantId ? item?.variants.find((entry) => entry.variantId === error.variantId) : null;
     const productLabel = item?.productName?.trim() || (error.productId ? `ID ${error.productId}` : 'sin dato');
     const variantLabel = variant
-        ? `${variant.attribute} ${variant.value}`.trim()
+        ? isSimpleGuidedVariant(variant)
+            ? 'General'
+            : `${variant.attribute} ${variant.value}`.trim()
         : error.variantId
             ? `ID ${error.variantId}`
             : 'sin dato';
     const requestedQty = toSafeQty(error.requestedQty) ?? (variant ? toSafeQty(variant.qty) : null);
     const availableQty = toSafeQty(error.availableQty);
     const missingQty = requestedQty !== null && availableQty !== null ? Math.max(0, requestedQty - availableQty) : null;
-    const lines = ['No pude confirmar inventario por stock insuficiente.', `Producto: ${productLabel}`, `Talla/variante: ${variantLabel}`];
+    const lines = ['No pude confirmar inventario por stock insuficiente.', `Producto: ${productLabel}`, `Referencia: ${variantLabel}`];
     if (requestedQty !== null)
         lines.push(`Solicitado: ${requestedQty}`);
     if (availableQty !== null)
@@ -1749,9 +1789,14 @@ const advanceAfterItems = async (pendingId, chatId, data, meta) => {
             meta.currentProductId = nextItem.productId;
             meta.currentProductName = nextItem.productName;
             meta.candidateVariants = buildCandidateVariantsFromItem(nextItem);
-            meta.step = 'price_mode';
+            meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode';
             await updateGuidedSaleState(pendingId, data, meta);
-            await askGuidedSalePrice(chatId);
+            if (isSimpleGuidedSale(meta)) {
+                await askGuidedSalePriceValue(chatId);
+            }
+            else {
+                await askGuidedSalePrice(chatId);
+            }
             return true;
         }
     }
@@ -1851,9 +1896,14 @@ const applyGuidedVariantSelection = async (pendingId, chatId, data, meta, varian
             meta.autoPriceApply = false;
             meta.pendingPriceAmount = null;
             meta.pendingPriceScope = null;
-            meta.step = 'price_mode';
+            meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode';
             await updateGuidedSaleState(pendingId, data, meta);
-            await askGuidedSalePrice(chatId);
+            if (isSimpleGuidedSale(meta)) {
+                await askGuidedSalePriceValue(chatId);
+            }
+            else {
+                await askGuidedSalePrice(chatId);
+            }
             return true;
         }
         meta.pendingPriceAmount = null;
@@ -1861,7 +1911,7 @@ const applyGuidedVariantSelection = async (pendingId, chatId, data, meta, varian
         meta.autoPriceApply = false;
         data.unitPrice = null;
         data.totalAmount = null;
-        if (meta.fastMode || meta.skipAddMore) {
+        if (shouldBypassGuidedAddMore(meta)) {
             return await advanceAfterItems(pendingId, chatId, data, meta);
         }
         meta.step = 'add_more';
@@ -1884,9 +1934,14 @@ const applyGuidedVariantSelection = async (pendingId, chatId, data, meta, varian
         });
         return true;
     }
-    meta.step = 'price_mode';
+    meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode';
     await updateGuidedSaleState(pendingId, data, meta);
-    await askGuidedSalePrice(chatId);
+    if (isSimpleGuidedSale(meta)) {
+        await askGuidedSalePriceValue(chatId);
+    }
+    else {
+        await askGuidedSalePrice(chatId);
+    }
     return true;
 };
 const continueAfterGuidedVariantPrices = async (pendingId, chatId, data, meta) => {
@@ -1900,10 +1955,15 @@ const continueAfterGuidedVariantPrices = async (pendingId, chatId, data, meta) =
                 meta.currentProductId = nextItem.productId;
                 meta.currentProductName = nextItem.productName;
                 meta.candidateVariants = buildCandidateVariantsFromItem(nextItem);
-                meta.step = 'price_mode';
+                meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode';
                 clearGuidedVariantWizard(meta);
                 await updateGuidedSaleState(pendingId, data, meta);
-                await askGuidedSalePrice(chatId);
+                if (isSimpleGuidedSale(meta)) {
+                    await askGuidedSalePriceValue(chatId);
+                }
+                else {
+                    await askGuidedSalePrice(chatId);
+                }
                 return true;
             }
         }
@@ -1964,6 +2024,7 @@ const startGuidedSale = async (chatId, companyId) => {
     if (existing && existing.status === 'PENDING_CONFIRMATION') {
         await dependencies_1.pendingEventRepository.updateStatus(existing.id, 'CANCELLED');
     }
+    const inventoryMode = await dependencies_1.inventoryGateway.getInventoryMode(companyId);
     const expiresAt = new Date(Date.now() + PENDING_EXPIRATION_MINUTES * 60 * 1000);
     const created = await dependencies_1.pendingEventRepository.create({
         companyId,
@@ -1973,7 +2034,7 @@ const startGuidedSale = async (chatId, companyId) => {
             saleId: dependencies_1.inventoryGateway.idGenerator(),
             items: [],
         },
-        metadata: { step: 'customer' },
+        metadata: { step: 'customer', inventoryMode },
         status: 'PENDING_CONFIRMATION',
         expiresAt,
     });
@@ -2573,23 +2634,30 @@ const startGuidedSaleWithPrefill = async (chatId, saleInput, productNameGuess) =
     const expiresAt = new Date(Date.now() + PENDING_EXPIRATION_MINUTES * 60 * 1000);
     const priceAmount = saleInput.unitPrice ?? saleInput.totalAmount ?? null;
     const priceScope = saleInput.unitPrice ? 'unit' : saleInput.totalAmount ? 'total' : null;
+    const inventoryMode = await dependencies_1.inventoryGateway.getInventoryMode(saleInput.companyId);
     let step = 'product';
-    const meta = { step };
+    const meta = { step, inventoryMode };
     let prefillProduct = null;
     let candidateVariants = null;
     if (productNameGuess?.trim()) {
         const product = await resolveProductByName(saleInput.companyId, productNameGuess);
         if (product) {
-            const variants = await dependencies_1.inventoryGateway.listVariantsByProductId(saleInput.companyId, String(product.id));
-            const activeVariants = variants.filter((variant) => variant.active);
-            if (activeVariants.length > 0) {
+            if (inventoryMode === 'SIMPLE') {
                 prefillProduct = { id: product.id.toString(), name: product.name };
-                candidateVariants = activeVariants.map((variant) => ({
-                    id: variant.id.toString(),
-                    attribute: variant.attribute,
-                    value: variant.value,
-                }));
-                step = 'variants';
+                step = 'quantity';
+            }
+            else {
+                const variants = await dependencies_1.inventoryGateway.listVariantsByProductId(saleInput.companyId, String(product.id));
+                const activeVariants = variants.filter((variant) => variant.active);
+                if (activeVariants.length > 0) {
+                    prefillProduct = { id: product.id.toString(), name: product.name };
+                    candidateVariants = activeVariants.map((variant) => ({
+                        id: variant.id.toString(),
+                        attribute: variant.attribute,
+                        value: variant.value,
+                    }));
+                    step = 'variants';
+                }
             }
         }
     }
@@ -2631,6 +2699,10 @@ const startGuidedSaleWithPrefill = async (chatId, saleInput, productNameGuess) =
     });
     if (meta.step === 'variants' && meta.currentProductName && meta.candidateVariants) {
         await askGuidedSaleVariants(chatId, meta.currentProductName, meta.candidateVariants, meta.pendingTotalQty ?? null);
+        return;
+    }
+    if (meta.step === 'quantity' && meta.currentProductName) {
+        await askGuidedSaleQuantity(chatId, meta.currentProductName, meta.pendingTotalQty ?? null);
         return;
     }
     await askGuidedSaleProduct(chatId);
@@ -2764,6 +2836,7 @@ const startFastSaleFromText = async (chatId, companyId, rawText, options) => {
     if (existing && existing.status === 'PENDING_CONFIRMATION') {
         await dependencies_1.pendingEventRepository.updateStatus(existing.id, 'CANCELLED');
     }
+    const inventoryMode = await dependencies_1.inventoryGateway.getInventoryMode(companyId);
     const cleanedText = rawText.replace(/venta\s+rápida|venta\s+rapida|registrar\s+venta\s+rápida|registrar\s+venta\s+rapida/gi, '').trim();
     const parsed = await (0, aiSaleItemsParser_1.aiParseSaleItems)(cleanedText || rawText);
     if (!parsed || parsed.items.length === 0) {
@@ -2798,6 +2871,45 @@ const startFastSaleFromText = async (chatId, companyId, rawText, options) => {
                 });
             }
             return false;
+        }
+        if (inventoryMode === 'SIMPLE') {
+            let totalQty = 0;
+            let unitPrice = null;
+            let totalPrice = null;
+            for (const variant of item.variants) {
+                const qty = Number(variant.qty);
+                if (Number.isFinite(qty) && qty > 0) {
+                    totalQty += Math.round(qty);
+                }
+                if (!unitPrice && variant.unitPrice && variant.unitPrice > 0) {
+                    unitPrice = Math.round(variant.unitPrice);
+                }
+                if (!totalPrice && variant.totalPrice && variant.totalPrice > 0) {
+                    totalPrice = Math.round(variant.totalPrice);
+                }
+            }
+            if (parsed.items.length === 1 && explicitSaleQty && hasPackHint) {
+                totalQty = explicitSaleQty;
+            }
+            else if (parsed.items.length === 1 && explicitSaleQty && totalQty <= 0) {
+                totalQty = explicitSaleQty;
+            }
+            if (!Number.isFinite(totalQty) || totalQty <= 0) {
+                if (!options?.silentFail) {
+                    await telegramClient_1.TelegramClient.sendMessage({
+                        chatId,
+                        text: `Cantidad invalida para ${product.name}.`,
+                    });
+                }
+                return false;
+            }
+            const resolvedUnitPrice = unitPrice ?? (totalPrice && totalPrice > 0 ? Math.round(totalPrice / totalQty) : null);
+            data.items.push({
+                productId: product.id.toString(),
+                productName: product.name,
+                variants: [buildSimpleGuidedVariant(totalQty, resolvedUnitPrice)],
+            });
+            continue;
         }
         const variants = [];
         let needsVariantSelection = false;
@@ -2892,6 +3004,7 @@ const startFastSaleFromText = async (chatId, companyId, rawText, options) => {
                         : null;
             const meta = {
                 step: 'variants',
+                inventoryMode,
                 currentProductId: product.id.toString(),
                 currentProductName: product.name,
                 candidateVariants: activeVariants.map((variant) => ({
@@ -2952,9 +3065,11 @@ const startFastSaleFromText = async (chatId, companyId, rawText, options) => {
         return false;
     }
     const pendingPriceProductIds = data.items.filter((item) => item.variants.some((variant) => !variant.unitPrice || variant.unitPrice <= 0)).map((item) => item.productId);
+    const forceAddMorePrompt = inventoryMode === 'SIMPLE';
     const meta = {
         step: 'confirm',
-        fastMode: true,
+        inventoryMode,
+        fastMode: forceAddMorePrompt ? undefined : true,
         pendingPriceProductIds,
     };
     if (pendingPriceProductIds.length > 0) {
@@ -2964,8 +3079,11 @@ const startFastSaleFromText = async (chatId, companyId, rawText, options) => {
             meta.currentProductId = current.productId;
             meta.currentProductName = current.productName;
             meta.candidateVariants = buildCandidateVariantsFromItem(current);
-            meta.step = 'price_mode';
+            meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode';
         }
+    }
+    else if (forceAddMorePrompt) {
+        meta.step = 'add_more';
     }
     else if (data.paymentMethod && /credito|cr[eé]dito/.test(normalizeText(data.paymentMethod)) && !data.creditDueDate) {
         meta.step = 'credit_due';
@@ -2999,6 +3117,14 @@ const startFastSaleFromText = async (chatId, companyId, rawText, options) => {
     }
     if (meta.step === 'price_mode') {
         await askGuidedSalePrice(chatId);
+        return true;
+    }
+    if (meta.step === 'price_same') {
+        await askGuidedSalePriceValue(chatId);
+        return true;
+    }
+    if (meta.step === 'add_more') {
+        await askGuidedSaleAddMore(chatId);
         return true;
     }
     if (meta.step === 'payment') {
@@ -3036,6 +3162,9 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
         return true;
     }
     const { data, meta } = getGuidedSaleState(pending);
+    if (!meta.inventoryMode) {
+        meta.inventoryMode = await dependencies_1.inventoryGateway.getInventoryMode(pending.companyId);
+    }
     if (data.items.length === 0 &&
         (meta.step === 'price_mode' ||
             meta.step === 'price_same' ||
@@ -3085,9 +3214,14 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             meta.currentProductId = nextItem.productId;
             meta.currentProductName = nextItem.productName;
             meta.candidateVariants = buildCandidateVariantsFromItem(nextItem);
-            meta.step = 'price_mode';
+            meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode';
             await updateGuidedSaleState(pending.id, data, meta);
-            await askGuidedSalePrice(chatId);
+            if (isSimpleGuidedSale(meta)) {
+                await askGuidedSalePriceValue(chatId);
+            }
+            else {
+                await askGuidedSalePrice(chatId);
+            }
             return true;
         }
     }
@@ -3108,6 +3242,10 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
         }
         meta.currentProductId = selected.id;
         meta.currentProductName = selected.name;
+        if (isSimpleGuidedSale(meta)) {
+            await moveGuidedSaleToQuantityStep(pending.id, chatId, data, meta, selected.id, selected.name);
+            return true;
+        }
         const variants = await dependencies_1.inventoryGateway.listVariantsByProductId(pending.companyId, selected.id);
         const activeVariants = variants.filter((variant) => variant.active);
         if (activeVariants.length === 0) {
@@ -3168,6 +3306,10 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             if (skuMatch) {
                 meta.currentProductId = skuMatch.id.toString();
                 meta.currentProductName = skuMatch.name;
+                if (isSimpleGuidedSale(meta)) {
+                    await moveGuidedSaleToQuantityStep(pending.id, chatId, data, meta, skuMatch.id.toString(), skuMatch.name);
+                    return true;
+                }
                 const variants = await dependencies_1.inventoryGateway.listVariantsByProductId(pending.companyId, skuMatch.id);
                 const activeVariants = variants.filter((variant) => variant.active);
                 if (activeVariants.length === 0) {
@@ -3203,6 +3345,10 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             const product = candidates[0];
             meta.currentProductId = product.id.toString();
             meta.currentProductName = product.name;
+            if (isSimpleGuidedSale(meta)) {
+                await moveGuidedSaleToQuantityStep(pending.id, chatId, data, meta, product.id.toString(), product.name);
+                return true;
+            }
             const variants = await dependencies_1.inventoryGateway.listVariantsByProductId(pending.companyId, String(product.id));
             const activeVariants = variants.filter((variant) => variant.active);
             if (activeVariants.length === 0) {
@@ -3226,6 +3372,24 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
         const list = meta.candidateProducts.map((product, index) => `${index + 1}) ${product.name}`).join('\n');
         await telegramClient_1.TelegramClient.sendMessage({ chatId, text: `Encontre varios productos:\n${list}\nResponde con el numero.` });
         return true;
+    }
+    if (meta.step === 'quantity' && meta.currentProductId && meta.currentProductName) {
+        const qty = parseSingleQuantity(text);
+        if (!qty || qty <= 0) {
+            await telegramClient_1.TelegramClient.sendMessage({
+                chatId,
+                text: 'Escribe una cantidad valida (numero entero mayor a 0).',
+            });
+            await askGuidedSaleQuantity(chatId, meta.currentProductName, meta.pendingTotalQty ?? null);
+            return true;
+        }
+        if (meta.pendingTotalQty && meta.pendingTotalQty > 0 && qty !== meta.pendingTotalQty) {
+            await telegramClient_1.TelegramClient.sendMessage({
+                chatId,
+                text: `La cantidad detectada era ${meta.pendingTotalQty}. Continuare con ${qty}.`,
+            });
+        }
+        return await applyGuidedVariantSelection(pending.id, chatId, data, meta, [buildSimpleGuidedVariant(qty)]);
     }
     if (meta.step === 'variants' && meta.currentProductId && meta.currentProductName && meta.candidateVariants?.length) {
         const wizardEnabled = typeof meta.variantWizardIndex === 'number';
@@ -3346,11 +3510,16 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
         if (answer) {
             const amount = data.unitPrice ?? data.totalAmount ?? 0;
             if (amount <= 0) {
-                meta.step = 'price_mode';
+                meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode';
                 data.unitPrice = null;
                 data.totalAmount = null;
                 await updateGuidedSaleState(pending.id, data, meta);
-                await askGuidedSalePrice(chatId);
+                if (isSimpleGuidedSale(meta)) {
+                    await askGuidedSalePriceValue(chatId);
+                }
+                else {
+                    await askGuidedSalePrice(chatId);
+                }
                 return true;
             }
             const totalQty = meta.currentProductId ? (data.items.find((item) => item.productId === meta.currentProductId)?.variants.reduce((sum, v) => sum + v.qty, 0) ?? 0) : 0;
@@ -3361,7 +3530,7 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             }
             data.unitPrice = null;
             data.totalAmount = null;
-            if (meta.fastMode || meta.skipAddMore) {
+            if (shouldBypassGuidedAddMore(meta)) {
                 return await advanceAfterItems(pending.id, chatId, data, meta);
             }
             meta.step = 'add_more';
@@ -3374,14 +3543,25 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             await askGuidedSaleAddMore(chatId);
             return true;
         }
-        meta.step = 'price_mode';
+        meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode';
         data.unitPrice = null;
         data.totalAmount = null;
         await updateGuidedSaleState(pending.id, data, meta);
-        await askGuidedSalePrice(chatId);
+        if (isSimpleGuidedSale(meta)) {
+            await askGuidedSalePriceValue(chatId);
+        }
+        else {
+            await askGuidedSalePrice(chatId);
+        }
         return true;
     }
     if (meta.step === 'price_mode') {
+        if (isSimpleGuidedSale(meta)) {
+            meta.step = 'price_same';
+            await updateGuidedSaleState(pending.id, data, meta);
+            await askGuidedSalePriceValue(chatId);
+            return true;
+        }
         if (!meta.currentProductId) {
             const nextItem = data.items.find((item) => item.variants.some((variant) => !variant.unitPrice || variant.unitPrice <= 0));
             if (nextItem) {
@@ -3451,7 +3631,7 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             meta.pendingPriceScope = null;
             data.unitPrice = null;
             data.totalAmount = null;
-            if (meta.fastMode || meta.skipAddMore) {
+            if (shouldBypassGuidedAddMore(meta)) {
                 return await advanceAfterItems(pending.id, chatId, data, meta);
             }
             meta.step = 'add_more';
@@ -3502,7 +3682,7 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
         meta.pendingPriceScope = null;
         data.unitPrice = null;
         data.totalAmount = null;
-        if (meta.fastMode) {
+        if (meta.fastMode && !isSimpleGuidedSale(meta)) {
             const remaining = (meta.pendingPriceProductIds ?? []).filter((id) => id !== meta.currentProductId);
             meta.pendingPriceProductIds = remaining;
             if (remaining.length > 0) {
@@ -3512,9 +3692,14 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
                     meta.currentProductId = nextItem.productId;
                     meta.currentProductName = nextItem.productName;
                     meta.candidateVariants = buildCandidateVariantsFromItem(nextItem);
-                    meta.step = 'price_mode';
+                    meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode';
                     await updateGuidedSaleState(pending.id, data, meta);
-                    await askGuidedSalePrice(chatId);
+                    if (isSimpleGuidedSale(meta)) {
+                        await askGuidedSalePriceValue(chatId);
+                    }
+                    else {
+                        await askGuidedSalePrice(chatId);
+                    }
                     return true;
                 }
             }
@@ -3753,9 +3938,14 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
         meta.currentProductId = nextItem.productId;
         meta.currentProductName = nextItem.productName;
         meta.candidateVariants = buildCandidateVariantsFromItem(nextItem);
-        meta.step = 'price_mode';
+        meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode';
         await updateGuidedSaleState(pending.id, data, meta);
-        await askGuidedSalePrice(chatId);
+        if (isSimpleGuidedSale(meta)) {
+            await askGuidedSalePriceValue(chatId);
+        }
+        else {
+            await askGuidedSalePrice(chatId);
+        }
         return true;
     }
     if (meta.step === 'payment') {
@@ -3989,7 +4179,7 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             }
         }
         const invoiceItems = data.items.flatMap((item) => item.variants.map((variant) => ({
-            description: `${item.productName} - ${variant.attribute} ${variant.value}`,
+            description: isSimpleGuidedVariant(variant) ? item.productName : `${item.productName} - ${variant.attribute} ${variant.value}`,
             qty: variant.qty,
             unitPrice: variant.unitPrice ?? unitPrice,
             lineTotal: Math.round((variant.unitPrice ?? unitPrice) * variant.qty),

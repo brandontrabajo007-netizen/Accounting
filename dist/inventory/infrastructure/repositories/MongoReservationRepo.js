@@ -58,5 +58,29 @@ class MongoReservationRepo {
         }
         return total;
     }
+    async listActiveQtyByProduct(companyId, productId) {
+        const now = new Date();
+        const docs = await ReservationModel_1.ReservationModel.find({
+            companyId,
+            status: 'ACTIVE',
+            expiresAt: { $gt: now },
+            'items.productId': productId,
+        })
+            .lean()
+            .exec();
+        let total = 0;
+        for (const doc of docs) {
+            for (const item of doc.items) {
+                if (item.productId === productId) {
+                    total += item.qty;
+                }
+            }
+        }
+        return total;
+    }
+    async existsByCompany(companyId) {
+        const doc = await ReservationModel_1.ReservationModel.findOne({ companyId }).select({ _id: 1 }).lean().exec();
+        return Boolean(doc);
+    }
 }
 exports.MongoReservationRepo = MongoReservationRepo;

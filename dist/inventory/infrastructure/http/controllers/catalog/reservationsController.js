@@ -10,6 +10,10 @@ const VariantId_1 = require("../../../../domain/value-objects/VariantId");
 const catalogSchemas_1 = require("../../validation/catalogSchemas");
 async function createReservationHandler(req, res) {
     const body = catalogSchemas_1.createReservationSchema.parse(req.body);
+    const settings = await (0, dependencies_1.getInventorySettings)({ companyId: body.companyId });
+    if (settings.mode === 'VARIANT' && body.items.some((item) => !item.variantId)) {
+        return res.status(400).json({ ok: false, error: 'variantId is required in VARIANT mode' });
+    }
     const validation = await (0, dependencies_1.validateSaleCart)({ companyId: body.companyId, items: body.items });
     if (!validation.ok || !validation.value.ok) {
         return res.status(400).json({ ok: false, issues: validation.ok ? validation.value.issues : validation.error });
@@ -19,7 +23,7 @@ async function createReservationHandler(req, res) {
     const reservationId = (0, dependencies_1.idGenerator)();
     const items = body.items.map((item) => ({
         productId: ProductId_1.ProductId.from(item.productId),
-        variantId: VariantId_1.VariantId.from(item.variantId),
+        variantId: VariantId_1.VariantId.from(item.variantId ?? item.productId),
         qty: Quantity_1.Quantity.from(item.qty),
     }));
     await dependencies_1.reservationRepo.create({

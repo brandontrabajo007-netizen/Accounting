@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.registerAdjustmentSchema = exports.registerReceiptSchema = exports.listMovementsQuerySchema = exports.stockQuerySchema = exports.updateVariantSchema = exports.createVariantSchema = exports.updateProductSchema = exports.createProductSchema = exports.listProductsQuerySchema = exports.paginationSchema = void 0;
+exports.registerAdjustmentSchema = exports.registerReceiptSchema = exports.listMovementsQuerySchema = exports.stockQuerySchema = exports.updateInventorySettingsSchema = exports.updateVariantSchema = exports.createVariantSchema = exports.updateProductSchema = exports.createProductSchema = exports.listProductsQuerySchema = exports.paginationSchema = void 0;
 const zod_1 = require("zod");
 const dateOnlyPattern = /^\d{4}-\d{2}-\d{2}$/;
 const dateFilterSchema = zod_1.z.string().trim().refine((value) => {
@@ -44,6 +44,9 @@ exports.updateVariantSchema = zod_1.z.object({
     skuVariant: zod_1.z.union([zod_1.z.string().min(1), zod_1.z.null()]).optional(),
     active: zod_1.z.boolean().optional(),
 });
+exports.updateInventorySettingsSchema = zod_1.z.object({
+    mode: zod_1.z.enum(['SIMPLE', 'VARIANT']),
+});
 exports.stockQuerySchema = zod_1.z.object({
     productId: zod_1.z.string().min(1).optional(),
     variantId: zod_1.z.string().min(1).optional(),
@@ -72,9 +75,6 @@ exports.registerReceiptSchema = zod_1.z.object({
             .optional(),
         qty: zod_1.z.number().int().positive(),
         unitCost: zod_1.z.number().min(0).optional(),
-    }).refine((item) => item.variantId || item.variant, {
-        message: 'variantId or variant is required',
-        path: ['variantId'],
     }))
         .min(1),
 });
@@ -83,7 +83,7 @@ exports.registerAdjustmentSchema = zod_1.z.object({
     items: zod_1.z
         .array(zod_1.z.object({
         productId: zod_1.z.string().min(1),
-        variantId: zod_1.z.string().min(1),
+        variantId: zod_1.z.string().min(1).optional(),
         qtyDelta: zod_1.z.number().int().refine((value) => value !== 0, 'qtyDelta must be != 0'),
     }))
         .min(1),

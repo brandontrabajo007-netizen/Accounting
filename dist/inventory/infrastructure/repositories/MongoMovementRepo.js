@@ -113,6 +113,10 @@ class MongoMovementRepo {
         const docs = await MovementModel_1.MovementModel.find({ companyId, productId, variantId }).lean().exec();
         return docs.map(toDomain);
     }
+    async listByProduct(companyId, productId) {
+        const docs = await MovementModel_1.MovementModel.find({ companyId, productId }).lean().exec();
+        return docs.map(toDomain);
+    }
     async listByVariant(companyId, variantId) {
         const docs = await MovementModel_1.MovementModel.find({ companyId, variantId }).lean().exec();
         return docs.map(toDomain);
@@ -120,6 +124,10 @@ class MongoMovementRepo {
     async existsByVariant(companyId, variantId) {
         const doc = await MovementModel_1.MovementModel.findOne({ companyId, variantId }).select({ _id: 1 }).lean().exec();
         return !!doc;
+    }
+    async existsByCompany(companyId) {
+        const doc = await MovementModel_1.MovementModel.findOne({ companyId }).select({ _id: 1 }).lean().exec();
+        return Boolean(doc);
     }
 }
 exports.MongoMovementRepo = MongoMovementRepo;

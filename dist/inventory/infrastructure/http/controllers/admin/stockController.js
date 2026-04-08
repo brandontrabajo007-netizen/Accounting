@@ -12,6 +12,8 @@ const VariantId_1 = require("../../../../domain/value-objects/VariantId");
 async function getStockHandler(req, res) {
     const companyId = req.user.companyId;
     const query = adminSchemas_1.stockQuerySchema.parse(req.query);
+    const settings = await (0, dependencies_1.getInventorySettings)({ companyId });
+    const mode = settings.mode;
     if (query.variantId) {
         const movements = await dependencies_1.movementRepo.listByVariant(companyId, VariantId_1.VariantId.from(query.variantId));
         const reservedQty = await dependencies_1.reservationRepo.listActiveQtyByVariant(companyId, VariantId_1.VariantId.from(query.variantId));
@@ -19,32 +21,59 @@ async function getStockHandler(req, res) {
         return res.json({ availableQty: stock.availableQty, reservedQty: stock.reservedQty });
     }
     if (query.productId) {
+        if (mode === 'SIMPLE') {
+            const movements = await dependencies_1.movementRepo.listByProduct(companyId, ProductId_1.ProductId.from(query.productId));
+            const reservedQty = await dependencies_1.reservationRepo.listActiveQtyByProduct(companyId, ProductId_1.ProductId.from(query.productId));
+            const stock = (0, computeAvailableStock_1.computeAvailableStock)(movements, reservedQty);
+            return res.json({ availableQty: stock.availableQty, reservedQty: stock.reservedQty, mode });
+        }
         const variants = await dependencies_1.variantRepo.listByProductId(companyId, ProductId_1.ProductId.from(query.productId));
         let totalAvailable = 0;
         let totalReserved = 0;
-        for (const variant of variants) {
+        for (const variant of variants.filter((entry) => entry.systemType !== 'SIMPLE_DEFAULT')) {
             const movements = await dependencies_1.movementRepo.listByProductAndVariant(companyId, variant.productId, variant.id);
             const reservedQty = await dependencies_1.reservationRepo.listActiveQtyByVariant(companyId, variant.id);
             const stock = (0, computeAvailableStock_1.computeAvailableStock)(movements, reservedQty);
             totalAvailable += stock.availableQty;
             totalReserved += stock.reservedQty;
         }
-        return res.json({ availableQty: totalAvailable, reservedQty: totalReserved });
+        return res.json({ availableQty: totalAvailable, reservedQty: totalReserved, mode });
     }
     return res.status(400).json({ ok: false, error: 'productId or variantId is required' });
 }
 async function getProductStockHandler(req, res) {
     const companyId = req.user.companyId;
+    const settings = await (0, dependencies_1.getInventorySettings)({ companyId });
+    const mode = settings.mode;
     const { productId } = req.params;
+    if (mode === 'SIMPLE') {
+        const movements = await dependencies_1.movementRepo.listByProduct(companyId, ProductId_1.ProductId.from(productId));
+        const reservedQty = await dependencies_1.reservationRepo.listActiveQtyByProduct(companyId, ProductId_1.ProductId.from(productId));
+        const stock = (0, computeAvailableStock_1.computeAvailableStock)(movements, reservedQty);
+        return res.json({
+            productId,
+            mode,
+            availableQty: stock.availableQty,
+            reservedQty: stock.reservedQty,
+            items: [
+                {
+                    variantId: productId,
+                    variantLabel: 'General',
+                    availableQty: stock.availableQty,
+                    reservedQty: stock.reservedQty,
+                },
+            ],
+        });
+    }
     const variants = await dependencies_1.variantRepo.listByProductId(companyId, ProductId_1.ProductId.from(productId));
     const items = [];
-    for (const variant of variants) {
+    for (const variant of variants.filter((entry) => entry.systemType !== 'SIMPLE_DEFAULT')) {
         const movements = await dependencies_1.movementRepo.listByProductAndVariant(companyId, variant.productId, variant.id);
         const reservedQty = await dependencies_1.reservationRepo.listActiveQtyByVariant(companyId, variant.id);
         const stock = (0, computeAvailableStock_1.computeAvailableStock)(movements, reservedQty);
         items.push({ variantId: variant.id, availableQty: stock.availableQty, reservedQty: stock.reservedQty });
     }
-    return res.json({ productId, items });
+    return res.json({ productId, mode, items });
 }
 async function getVariantStockHandler(req, res) {
     const companyId = req.user.companyId;
@@ -56,6 +85,8 @@ async function getVariantStockHandler(req, res) {
 }
 async function getGlobalStockHandler(req, res) {
     const companyId = req.user.companyId;
+    const settings = await (0, dependencies_1.getInventorySettings)({ companyId });
+    const mode = settings.mode;
     const products = await dependencies_1.productRepo.list({
         companyId,
         page: 1,
@@ -63,8 +94,22 @@ async function getGlobalStockHandler(req, res) {
     });
     const items = [];
     for (const product of products.items) {
+        if (mode === 'SIMPLE') {
+            const movements = await dependencies_1.movementRepo.listByProduct(companyId, product.id);
+            const reservedQty = await dependencies_1.reservationRepo.listActiveQtyByProduct(companyId, product.id);
+            const stock = (0, computeAvailableStock_1.computeAvailableStock)(movements, reservedQty);
+            items.push({
+                productId: product.id,
+                productName: product.name,
+                variantId: product.id,
+                variantLabel: 'General',
+                availableQty: stock.availableQty,
+                reservedQty: stock.reservedQty,
+            });
+            continue;
+        }
         const variants = await dependencies_1.variantRepo.listByProductId(companyId, product.id);
-        for (const variant of variants) {
+        for (const variant of variants.filter((entry) => entry.systemType !== 'SIMPLE_DEFAULT')) {
             const movements = await dependencies_1.movementRepo.listByProductAndVariant(companyId, product.id, variant.id);
             const reservedQty = await dependencies_1.reservationRepo.listActiveQtyByVariant(companyId, variant.id);
             const stock = (0, computeAvailableStock_1.computeAvailableStock)(movements, reservedQty);
@@ -78,5 +123,5 @@ async function getGlobalStockHandler(req, res) {
             });
         }
     }
-    return res.json({ items });
+    return res.json({ mode, items });
 }

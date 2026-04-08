@@ -5,8 +5,17 @@ const Result_1 = require("../types/Result");
 const ProductId_1 = require("../../domain/value-objects/ProductId");
 const Sku_1 = require("../../domain/value-objects/Sku");
 const VariantId_1 = require("../../domain/value-objects/VariantId");
+const resolveInventoryMode_1 = require("../services/resolveInventoryMode");
 function makeCreateVariant(deps) {
     return async function createVariant(command) {
+        const mode = await (0, resolveInventoryMode_1.resolveInventoryMode)(deps.inventorySettingsRepo, command.companyId);
+        if (mode === 'SIMPLE') {
+            return Result_1.Result.err({
+                type: 'InventoryModeViolation',
+                mode,
+                operation: 'VARIANT_MANAGEMENT',
+            });
+        }
         const product = await deps.productRepo.getById(command.companyId, ProductId_1.ProductId.from(command.productId));
         if (!product) {
             return Result_1.Result.err({ type: 'ProductNotFound', productId: command.productId });

@@ -12,6 +12,7 @@ const VariantSchema = new mongoose_1.default.Schema({
     attribute: { type: String, required: true },
     value: { type: String, required: true },
     skuVariant: { type: String, required: false },
+    systemType: { type: String, enum: ['SIMPLE_DEFAULT'], required: false, index: true },
     active: { type: Boolean, required: true },
     createdAt: { type: Date, required: true },
     updatedAt: { type: Date, required: true },

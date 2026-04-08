@@ -118,6 +118,7 @@ exports.domainEventBus = (0, makeInMemoryDomainEventBus_1.makeInMemoryDomainEven
 exports.processJournalEntry = (0, processJournalEntry_1.makeProcessJournalEntry)(exports.journalEntryRepository, exports.ledgerPoster, exports.periodAccessGuard);
 exports.inventoryGateway = {
     idGenerator: dependencies_1.idGenerator,
+    getInventoryMode: async (companyId) => (await (0, dependencies_1.getInventorySettings)({ companyId })).mode,
     listProducts: (input) => dependencies_1.productRepo.list(input),
     listMovements: (input) => dependencies_1.movementRepo.list(input),
     listVariantsByProductId: (companyId, productId) => dependencies_1.variantRepo.listByProductId(companyId, ProductId_1.ProductId.from(productId)),
