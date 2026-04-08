@@ -1799,6 +1799,9 @@ const askGuidedSaleProduct = async (chatId: number) => {
 
 const isSimpleGuidedSale = (meta: GuidedSaleMetadata) => meta.inventoryMode === 'SIMPLE'
 
+const shouldBypassGuidedAddMore = (meta: GuidedSaleMetadata) =>
+  meta.skipAddMore === true || (meta.fastMode === true && !isSimpleGuidedSale(meta))
+
 const buildSimpleGuidedVariant = (qty: number, unitPrice: number | null = null): GuidedSaleVariant => ({
   variantId: SIMPLE_GUIDED_VARIANT_ID,
   attribute: SIMPLE_GUIDED_VARIANT_ATTRIBUTE,
@@ -2360,7 +2363,7 @@ const applyGuidedVariantSelection = async (
     data.unitPrice = null
     data.totalAmount = null
 
-    if (meta.fastMode || meta.skipAddMore) {
+    if (shouldBypassGuidedAddMore(meta)) {
       return await advanceAfterItems(pendingId, chatId, data, meta)
     }
 
@@ -3654,10 +3657,11 @@ const startFastSaleFromText = async (chatId: number, companyId: string, rawText:
 
   const pendingPriceProductIds = data.items.filter((item) => item.variants.some((variant) => !variant.unitPrice || variant.unitPrice <= 0)).map((item) => item.productId)
 
+  const forceAddMorePrompt = inventoryMode === 'SIMPLE'
   const meta: GuidedSaleMetadata = {
     step: 'confirm',
     inventoryMode,
-    fastMode: true,
+    fastMode: forceAddMorePrompt ? undefined : true,
     pendingPriceProductIds,
   }
 
@@ -3670,6 +3674,8 @@ const startFastSaleFromText = async (chatId: number, companyId: string, rawText:
       meta.candidateVariants = buildCandidateVariantsFromItem(current)
       meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode'
     }
+  } else if (forceAddMorePrompt) {
+    meta.step = 'add_more'
   } else if (data.paymentMethod && /credito|cr[eé]dito/.test(normalizeText(data.paymentMethod)) && !data.creditDueDate) {
     meta.step = 'credit_due'
   } else if (!data.paymentMethod) {
@@ -3709,6 +3715,11 @@ const startFastSaleFromText = async (chatId: number, companyId: string, rawText:
 
   if (meta.step === 'price_same') {
     await askGuidedSalePriceValue(chatId)
+    return true
+  }
+
+  if (meta.step === 'add_more') {
+    await askGuidedSaleAddMore(chatId)
     return true
   }
 
@@ -4182,7 +4193,7 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
 
       data.unitPrice = null
       data.totalAmount = null
-      if (meta.fastMode || meta.skipAddMore) {
+      if (shouldBypassGuidedAddMore(meta)) {
         return await advanceAfterItems(pending.id, chatId, data, meta)
       }
 
@@ -4298,7 +4309,7 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
       data.unitPrice = null
       data.totalAmount = null
 
-      if (meta.fastMode || meta.skipAddMore) {
+      if (shouldBypassGuidedAddMore(meta)) {
         return await advanceAfterItems(pending.id, chatId, data, meta)
       }
 
@@ -4356,7 +4367,7 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
     data.unitPrice = null
     data.totalAmount = null
 
-    if (meta.fastMode) {
+    if (meta.fastMode && !isSimpleGuidedSale(meta)) {
       const remaining = (meta.pendingPriceProductIds ?? []).filter((id) => id !== meta.currentProductId)
       meta.pendingPriceProductIds = remaining
       if (remaining.length > 0) {
