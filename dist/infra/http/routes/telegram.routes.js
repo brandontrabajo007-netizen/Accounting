@@ -321,6 +321,98 @@ const isJournalDateWithinPeriod = (value, period) => {
 };
 const parseMovementType = (value) => normalizeText(String(value ?? ''));
 const parseMovementGroup = (value) => String(value ?? '').toUpperCase();
+const emptySalesMoneyBuckets = () => ({
+    cash: 0,
+    bank: 0,
+    receivable: 0,
+    unclassified: 0,
+});
+const getSalesMoneyBucketsTotal = (buckets) => buckets.cash + buckets.bank + buckets.receivable + buckets.unclassified;
+const addSalesMoneyBuckets = (target, source) => {
+    target.cash += source.cash;
+    target.bank += source.bank;
+    target.receivable += source.receivable;
+    target.unclassified += source.unclassified;
+};
+const alignSalesBucketsWithExpected = (buckets, expectedAmount) => {
+    if (!Number.isFinite(expectedAmount) || expectedAmount <= 0)
+        return buckets;
+    const current = getSalesMoneyBucketsTotal(buckets);
+    if (current < expectedAmount) {
+        return { ...buckets, unclassified: buckets.unclassified + (expectedAmount - current) };
+    }
+    return buckets;
+};
+const isCreditPaymentText = (value) => /\b(credito|a credito|al credito)\b/.test(normalizeText(value ?? ''));
+const isBankPaymentText = (value) => /\b(banco|transferencia|transfer|tarjeta|nequi|daviplata|pse)\b/.test(normalizeText(value ?? ''));
+const classifySalesAmountByPaymentText = (amount, paymentText, options) => {
+    const buckets = emptySalesMoneyBuckets();
+    if (!Number.isFinite(amount) || amount <= 0)
+        return buckets;
+    if (isCreditPaymentText(paymentText)) {
+        buckets.receivable = amount;
+        return buckets;
+    }
+    if (isBankPaymentText(paymentText)) {
+        buckets.bank = amount;
+        return buckets;
+    }
+    if (options?.defaultToCash ?? true) {
+        buckets.cash = amount;
+    }
+    else {
+        buckets.unclassified = amount;
+    }
+    return buckets;
+};
+const classifySalesDebitMovementsByAccount = (movements, accountConfig, includeUnclassified) => {
+    const buckets = emptySalesMoneyBuckets();
+    for (const movement of movements) {
+        if (parseMovementType(movement.type) !== 'debit')
+            continue;
+        const amount = Number(movement.amount);
+        if (!Number.isFinite(amount) || amount <= 0)
+            continue;
+        const accountCode = Number(movement.accountCode);
+        if (!Number.isFinite(accountCode))
+            continue;
+        if (accountConfig.accountsReceivableAccount && accountCode === accountConfig.accountsReceivableAccount) {
+            buckets.receivable += amount;
+            continue;
+        }
+        if (accountConfig.bankAccount && accountCode === accountConfig.bankAccount) {
+            buckets.bank += amount;
+            continue;
+        }
+        if (accountConfig.cashAccount && accountCode === accountConfig.cashAccount) {
+            buckets.cash += amount;
+            continue;
+        }
+        if (includeUnclassified)
+            buckets.unclassified += amount;
+    }
+    return buckets;
+};
+const getSalesMoneyBucketsFromJournalEntry = (entry, saleAmount, accountConfig) => {
+    const expectedAmount = Number.isFinite(saleAmount) && saleAmount > 0 ? saleAmount : 0;
+    if (expectedAmount <= 0)
+        return emptySalesMoneyBuckets();
+    if (accountConfig && (accountConfig.cashAccount || accountConfig.bankAccount || accountConfig.accountsReceivableAccount)) {
+        const revenueDebits = entry.movements.filter((movement) => parseMovementType(movement.type) === 'debit' &&
+            parseMovementGroup(movement.group) === 'REVENUE' &&
+            Number.isFinite(movement.amount) &&
+            movement.amount > 0);
+        const byRevenue = classifySalesDebitMovementsByAccount(revenueDebits, accountConfig, true);
+        if (getSalesMoneyBucketsTotal(byRevenue) > 0) {
+            return alignSalesBucketsWithExpected(byRevenue, expectedAmount);
+        }
+        const byAnyDebit = classifySalesDebitMovementsByAccount(entry.movements, accountConfig, false);
+        if (getSalesMoneyBucketsTotal(byAnyDebit) > 0) {
+            return alignSalesBucketsWithExpected(byAnyDebit, expectedAmount);
+        }
+    }
+    return classifySalesAmountByPaymentText(expectedAmount, entry.description, { defaultToCash: false });
+};
 const getSaleAmountFromJournalEntry = (entry) => {
     const revenueDebit = entry.movements
         .filter((movement) => parseMovementType(movement.type) === 'debit' && parseMovementGroup(movement.group) === 'REVENUE')
@@ -390,7 +482,20 @@ const getSalesMetricsSummary = async (companyId, period) => {
         }
     }));
     const topProduct = productBreakdown[0] ?? null;
+    let saleAccountConfig = null;
+    try {
+        const mapping = await dependencies_1.saleAccountMappingRepository.getSaleAccountMappingByCompanyId(companyId);
+        saleAccountConfig = {
+            cashAccount: Number.isFinite(mapping.cashAccount) ? mapping.cashAccount : null,
+            bankAccount: Number.isFinite(mapping.bankAccount ?? NaN) ? mapping.bankAccount : null,
+            accountsReceivableAccount: Number.isFinite(mapping.accountsReceivableAccount ?? NaN) ? mapping.accountsReceivableAccount : null,
+        };
+    }
+    catch {
+        saleAccountConfig = null;
+    }
     let totalSalesMoneyFromJournal = 0;
+    const salesMoneyBucketsFromJournal = emptySalesMoneyBuckets();
     let journalPage = 1;
     const journalLimit = 200;
     let totalJournalPages = 1;
@@ -408,12 +513,15 @@ const getSalesMetricsSummary = async (companyId, period) => {
             if (!isJournalDateWithinPeriod(entry.date, period))
                 continue;
             const saleAmount = getSaleAmountFromJournalEntry(entry);
+            const buckets = getSalesMoneyBucketsFromJournalEntry(entry, saleAmount, saleAccountConfig);
             totalSalesMoneyFromJournal += saleAmount;
+            addSalesMoneyBuckets(salesMoneyBucketsFromJournal, buckets);
         }
         totalJournalPages = Math.max(1, pageResult.totalPages);
         journalPage += 1;
     } while (journalPage <= totalJournalPages);
     let totalSalesMoneyFromInvoices = 0;
+    const salesMoneyBucketsFromInvoices = emptySalesMoneyBuckets();
     let invoicePage = 1;
     const invoiceLimit = 200;
     let totalInvoiceRecords = 0;
@@ -434,14 +542,22 @@ const getSalesMetricsSummary = async (companyId, period) => {
             if (!Number.isFinite(amount) || amount <= 0)
                 continue;
             totalSalesMoneyFromInvoices += amount;
+            addSalesMoneyBuckets(salesMoneyBucketsFromInvoices, classifySalesAmountByPaymentText(amount, typeof invoiceData.paymentMethod === 'string' ? invoiceData.paymentMethod : null));
         }
         if (invoicePageResult.items.length === 0 || invoicePage * invoiceLimit >= totalInvoiceRecords)
             break;
         invoicePage += 1;
     }
-    const totalSalesMoney = totalSalesMoneyFromJournal > 0
+    const useJournalTotals = totalSalesMoneyFromJournal > 0;
+    const useInvoiceTotals = !useJournalTotals && totalUnits > 0 && totalSalesMoneyFromInvoices > 0;
+    const selectedSalesMoneyBuckets = useJournalTotals
+        ? salesMoneyBucketsFromJournal
+        : useInvoiceTotals
+            ? salesMoneyBucketsFromInvoices
+            : emptySalesMoneyBuckets();
+    const totalSalesMoney = useJournalTotals
         ? totalSalesMoneyFromJournal
-        : totalUnits > 0 && totalSalesMoneyFromInvoices > 0
+        : useInvoiceTotals
             ? totalSalesMoneyFromInvoices
             : 0;
     return {
@@ -450,6 +566,10 @@ const getSalesMetricsSummary = async (companyId, period) => {
         topProductQty: topProduct?.qty ?? 0,
         productBreakdown,
         totalSalesMoney: Math.round(totalSalesMoney),
+        cashSalesMoney: Math.round(selectedSalesMoneyBuckets.cash),
+        bankSalesMoney: Math.round(selectedSalesMoneyBuckets.bank),
+        accountsReceivableSalesMoney: Math.round(selectedSalesMoneyBuckets.receivable),
+        unclassifiedSalesMoney: Math.round(selectedSalesMoneyBuckets.unclassified),
     };
 };
 const normalizeBaseUrl = (value) => {
@@ -4861,13 +4981,18 @@ router.post('/webhook', async (req, res) => {
                         : otherProducts.length === 0
                             ? '📦 Otros productos: no hubo más productos vendidos'
                             : `📦 Otros productos:\n${visibleOthers.map((item) => `- ${item.productName}: ${item.qty} unidades`).join('\n')}${hiddenOthers > 0 ? `\n- ... y ${hiddenOthers} producto(s) más` : ''}`;
+                    const unclassifiedSalesLine = summary.unclassifiedSalesMoney > 0 ? `\n❓ Sin clasificar: ${formatCurrency(summary.unclassifiedSalesMoney)}` : '';
                     await telegramClient_1.TelegramClient.sendMessage({
                         chatId,
                         text: `📊 Ventas (${periodLabel})\n\n` +
                             `🔢 Cantidad vendida: ${summary.totalUnits} unidades\n` +
                             `${topProductLine}\n` +
                             `${otherProductsLine}\n` +
-                            `💰 Ventas en dinero: ${formatCurrency(summary.totalSalesMoney)}`,
+                            `💰 Ventas en dinero: ${formatCurrency(summary.totalSalesMoney)}\n` +
+                            `💵 En efectivo: ${formatCurrency(summary.cashSalesMoney)}\n` +
+                            `🏦 En bancos: ${formatCurrency(summary.bankSalesMoney)}\n` +
+                            `🧾 Te deben: ${formatCurrency(summary.accountsReceivableSalesMoney)}` +
+                            `${unclassifiedSalesLine}`,
                     });
                     return res.status(200).json({ ok: true });
                 }

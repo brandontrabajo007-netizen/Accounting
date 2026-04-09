@@ -392,11 +392,151 @@ const isJournalDateWithinPeriod = (value: Date, period: DateRange) => {
 const parseMovementType = (value: unknown) => normalizeText(String(value ?? ''))
 const parseMovementGroup = (value: unknown) => String(value ?? '').toUpperCase()
 
-const getSaleAmountFromJournalEntry = (entry: {
+type SalesMovementMetric = {
+  accountCode?: number
+  type: string
+  group: string
+  amount: number
+}
+
+type SalesJournalEntryMetric = {
   eventType?: string
   description?: string
-  movements: Array<{ type: string; group: string; amount: number }>
-}) => {
+  movements: SalesMovementMetric[]
+}
+
+type SalesMoneyBuckets = {
+  cash: number
+  bank: number
+  receivable: number
+  unclassified: number
+}
+
+type SaleAccountBucketsConfig = {
+  cashAccount?: number | null
+  bankAccount?: number | null
+  accountsReceivableAccount?: number | null
+}
+
+const emptySalesMoneyBuckets = (): SalesMoneyBuckets => ({
+  cash: 0,
+  bank: 0,
+  receivable: 0,
+  unclassified: 0,
+})
+
+const getSalesMoneyBucketsTotal = (buckets: SalesMoneyBuckets) => buckets.cash + buckets.bank + buckets.receivable + buckets.unclassified
+
+const addSalesMoneyBuckets = (target: SalesMoneyBuckets, source: SalesMoneyBuckets) => {
+  target.cash += source.cash
+  target.bank += source.bank
+  target.receivable += source.receivable
+  target.unclassified += source.unclassified
+}
+
+const alignSalesBucketsWithExpected = (buckets: SalesMoneyBuckets, expectedAmount: number): SalesMoneyBuckets => {
+  if (!Number.isFinite(expectedAmount) || expectedAmount <= 0) return buckets
+  const current = getSalesMoneyBucketsTotal(buckets)
+  if (current < expectedAmount) {
+    return { ...buckets, unclassified: buckets.unclassified + (expectedAmount - current) }
+  }
+  return buckets
+}
+
+const isCreditPaymentText = (value: string | null | undefined) => /\b(credito|a credito|al credito)\b/.test(normalizeText(value ?? ''))
+const isBankPaymentText = (value: string | null | undefined) =>
+  /\b(banco|transferencia|transfer|tarjeta|nequi|daviplata|pse)\b/.test(normalizeText(value ?? ''))
+
+const classifySalesAmountByPaymentText = (
+  amount: number,
+  paymentText: string | null | undefined,
+  options?: { defaultToCash?: boolean },
+): SalesMoneyBuckets => {
+  const buckets = emptySalesMoneyBuckets()
+  if (!Number.isFinite(amount) || amount <= 0) return buckets
+
+  if (isCreditPaymentText(paymentText)) {
+    buckets.receivable = amount
+    return buckets
+  }
+
+  if (isBankPaymentText(paymentText)) {
+    buckets.bank = amount
+    return buckets
+  }
+
+  if (options?.defaultToCash ?? true) {
+    buckets.cash = amount
+  } else {
+    buckets.unclassified = amount
+  }
+  return buckets
+}
+
+const classifySalesDebitMovementsByAccount = (
+  movements: SalesMovementMetric[],
+  accountConfig: SaleAccountBucketsConfig,
+  includeUnclassified: boolean,
+): SalesMoneyBuckets => {
+  const buckets = emptySalesMoneyBuckets()
+
+  for (const movement of movements) {
+    if (parseMovementType(movement.type) !== 'debit') continue
+    const amount = Number(movement.amount)
+    if (!Number.isFinite(amount) || amount <= 0) continue
+    const accountCode = Number(movement.accountCode)
+    if (!Number.isFinite(accountCode)) continue
+
+    if (accountConfig.accountsReceivableAccount && accountCode === accountConfig.accountsReceivableAccount) {
+      buckets.receivable += amount
+      continue
+    }
+    if (accountConfig.bankAccount && accountCode === accountConfig.bankAccount) {
+      buckets.bank += amount
+      continue
+    }
+    if (accountConfig.cashAccount && accountCode === accountConfig.cashAccount) {
+      buckets.cash += amount
+      continue
+    }
+    if (includeUnclassified) buckets.unclassified += amount
+  }
+
+  return buckets
+}
+
+const getSalesMoneyBucketsFromJournalEntry = (
+  entry: SalesJournalEntryMetric,
+  saleAmount: number,
+  accountConfig: SaleAccountBucketsConfig | null,
+): SalesMoneyBuckets => {
+  const expectedAmount = Number.isFinite(saleAmount) && saleAmount > 0 ? saleAmount : 0
+  if (expectedAmount <= 0) return emptySalesMoneyBuckets()
+
+  if (accountConfig && (accountConfig.cashAccount || accountConfig.bankAccount || accountConfig.accountsReceivableAccount)) {
+    const revenueDebits = entry.movements.filter(
+      (movement) =>
+        parseMovementType(movement.type) === 'debit' &&
+        parseMovementGroup(movement.group) === 'REVENUE' &&
+        Number.isFinite(movement.amount) &&
+        movement.amount > 0,
+    )
+
+    const byRevenue = classifySalesDebitMovementsByAccount(revenueDebits, accountConfig, true)
+    if (getSalesMoneyBucketsTotal(byRevenue) > 0) {
+      return alignSalesBucketsWithExpected(byRevenue, expectedAmount)
+    }
+
+    const byAnyDebit = classifySalesDebitMovementsByAccount(entry.movements, accountConfig, false)
+    if (getSalesMoneyBucketsTotal(byAnyDebit) > 0) {
+      return alignSalesBucketsWithExpected(byAnyDebit, expectedAmount)
+    }
+  }
+
+  return classifySalesAmountByPaymentText(expectedAmount, entry.description, { defaultToCash: false })
+}
+
+const getSaleAmountFromJournalEntry = (entry: SalesJournalEntryMetric) => {
   const revenueDebit = entry.movements
     .filter((movement) => parseMovementType(movement.type) === 'debit' && parseMovementGroup(movement.group) === 'REVENUE')
     .reduce((sum, movement) => sum + (Number.isFinite(movement.amount) ? movement.amount : 0), 0)
@@ -472,8 +612,21 @@ const getSalesMetricsSummary = async (companyId: string, period: DateRange) => {
   )
 
   const topProduct = productBreakdown[0] ?? null
+  let saleAccountConfig: SaleAccountBucketsConfig | null = null
+
+  try {
+    const mapping = await saleAccountMappingRepository.getSaleAccountMappingByCompanyId(companyId)
+    saleAccountConfig = {
+      cashAccount: Number.isFinite(mapping.cashAccount) ? mapping.cashAccount : null,
+      bankAccount: Number.isFinite(mapping.bankAccount ?? NaN) ? (mapping.bankAccount as number) : null,
+      accountsReceivableAccount: Number.isFinite(mapping.accountsReceivableAccount ?? NaN) ? (mapping.accountsReceivableAccount as number) : null,
+    }
+  } catch {
+    saleAccountConfig = null
+  }
 
   let totalSalesMoneyFromJournal = 0
+  const salesMoneyBucketsFromJournal = emptySalesMoneyBuckets()
   let journalPage = 1
   const journalLimit = 200
   let totalJournalPages = 1
@@ -492,7 +645,9 @@ const getSalesMetricsSummary = async (companyId: string, period: DateRange) => {
     for (const entry of pageResult.docs) {
       if (!isJournalDateWithinPeriod(entry.date, period)) continue
       const saleAmount = getSaleAmountFromJournalEntry(entry)
+      const buckets = getSalesMoneyBucketsFromJournalEntry(entry, saleAmount, saleAccountConfig)
       totalSalesMoneyFromJournal += saleAmount
+      addSalesMoneyBuckets(salesMoneyBucketsFromJournal, buckets)
     }
 
     totalJournalPages = Math.max(1, pageResult.totalPages)
@@ -500,6 +655,7 @@ const getSalesMetricsSummary = async (companyId: string, period: DateRange) => {
   } while (journalPage <= totalJournalPages)
 
   let totalSalesMoneyFromInvoices = 0
+  const salesMoneyBucketsFromInvoices = emptySalesMoneyBuckets()
   let invoicePage = 1
   const invoiceLimit = 200
   let totalInvoiceRecords = 0
@@ -522,16 +678,28 @@ const getSalesMetricsSummary = async (companyId: string, period: DateRange) => {
       const amount = Number(invoiceData.totalAmount ?? 0)
       if (!Number.isFinite(amount) || amount <= 0) continue
       totalSalesMoneyFromInvoices += amount
+      addSalesMoneyBuckets(
+        salesMoneyBucketsFromInvoices,
+        classifySalesAmountByPaymentText(amount, typeof invoiceData.paymentMethod === 'string' ? invoiceData.paymentMethod : null),
+      )
     }
 
     if (invoicePageResult.items.length === 0 || invoicePage * invoiceLimit >= totalInvoiceRecords) break
     invoicePage += 1
   }
 
+  const useJournalTotals = totalSalesMoneyFromJournal > 0
+  const useInvoiceTotals = !useJournalTotals && totalUnits > 0 && totalSalesMoneyFromInvoices > 0
+  const selectedSalesMoneyBuckets = useJournalTotals
+    ? salesMoneyBucketsFromJournal
+    : useInvoiceTotals
+      ? salesMoneyBucketsFromInvoices
+      : emptySalesMoneyBuckets()
+
   const totalSalesMoney =
-    totalSalesMoneyFromJournal > 0
+    useJournalTotals
       ? totalSalesMoneyFromJournal
-      : totalUnits > 0 && totalSalesMoneyFromInvoices > 0
+      : useInvoiceTotals
         ? totalSalesMoneyFromInvoices
         : 0
 
@@ -541,6 +709,10 @@ const getSalesMetricsSummary = async (companyId: string, period: DateRange) => {
     topProductQty: topProduct?.qty ?? 0,
     productBreakdown,
     totalSalesMoney: Math.round(totalSalesMoney),
+    cashSalesMoney: Math.round(selectedSalesMoneyBuckets.cash),
+    bankSalesMoney: Math.round(selectedSalesMoneyBuckets.bank),
+    accountsReceivableSalesMoney: Math.round(selectedSalesMoneyBuckets.receivable),
+    unclassifiedSalesMoney: Math.round(selectedSalesMoneyBuckets.unclassified),
   }
 }
 
@@ -5770,6 +5942,8 @@ router.post('/webhook', async (req: Request, res: Response) => {
                 : `📦 Otros productos:\n${visibleOthers.map((item) => `- ${item.productName}: ${item.qty} unidades`).join('\n')}${
                     hiddenOthers > 0 ? `\n- ... y ${hiddenOthers} producto(s) más` : ''
                   }`
+          const unclassifiedSalesLine =
+            summary.unclassifiedSalesMoney > 0 ? `\n❓ Sin clasificar: ${formatCurrency(summary.unclassifiedSalesMoney)}` : ''
 
           await TelegramClient.sendMessage({
             chatId,
@@ -5778,7 +5952,11 @@ router.post('/webhook', async (req: Request, res: Response) => {
               `🔢 Cantidad vendida: ${summary.totalUnits} unidades\n` +
               `${topProductLine}\n` +
               `${otherProductsLine}\n` +
-              `💰 Ventas en dinero: ${formatCurrency(summary.totalSalesMoney)}`,
+              `💰 Ventas en dinero: ${formatCurrency(summary.totalSalesMoney)}\n` +
+              `💵 En efectivo: ${formatCurrency(summary.cashSalesMoney)}\n` +
+              `🏦 En bancos: ${formatCurrency(summary.bankSalesMoney)}\n` +
+              `🧾 Te deben: ${formatCurrency(summary.accountsReceivableSalesMoney)}` +
+              `${unclassifiedSalesLine}`,
           })
           return res.status(200).json({ ok: true })
         } catch (err) {
