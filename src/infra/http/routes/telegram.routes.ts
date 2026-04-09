@@ -21,8 +21,10 @@ import type { PendingEvent, PendingEventStatus, PendingEventType } from '@applic
 import { makeGenerateIncomeStatement } from '@application/reports/use-cases/generateIncomeStatement'
 import { AccountingPeriodStatus } from '@domain/accounting-periods/AccountingPeriodStatus'
 import { EventType } from '@domain/events/EventType.enum'
+import { JournalEntryStatus } from '@domain/journal-entries/JournalEntryStatus'
 import type { Movement } from '@domain/movements'
 import { generateInvoicePdfBuffer } from '@infra/pdf/invoicePdfGenerator'
+import { buildPasswordResetTelegramPayload, issuePasswordResetLink } from '@infra/security/passwordReset'
 import { TelegramAdapter } from '@infra/telegram/telegramAdapter'
 import { TelegramClient } from '@infra/telegram/telegramClient'
 import { WhatsAppClient } from '@infra/whatsapp/whatsappClient'
@@ -201,6 +203,10 @@ Con mis superpoderes puedo:
 "Crear cliente: Juan Pérez, cédula: 123456789, teléfono: 3001234567, ciudad: Cali, dirección: Cra 10 # 20-30"
 "Consultar cliente: Juan Pérez"
 
+🔐 *Cambiar contraseña:*
+"Cambiar contraseña"
+"Olvidé mi contraseña"
+
 🏢 *Datos de la empresa para factura:*
 "Llenar datos de la empresa"
 
@@ -247,6 +253,13 @@ const bogotaDateFormatter = new Intl.DateTimeFormat('en-CA', {
 const getBogotaTodayRange = (): DateRange => {
   const today = bogotaDateFormatter.format(new Date())
   return { start: today, end: today }
+}
+
+const getBogotaRelativeDayRange = (offsetDays: number): DateRange => {
+  const base = getBogotaTodayUtc()
+  base.setUTCDate(base.getUTCDate() + offsetDays)
+  const day = toDateString(base)
+  return { start: day, end: day }
 }
 
 const toDateString = (date: Date) => date.toISOString().slice(0, 10)
@@ -320,6 +333,8 @@ const parseSalesMetricsMonthByName = (normalized: string): DateRange | null => {
 
 const parseSalesMetricsPeriod = (value: string): DateRange => {
   const normalized = normalizeText(value)
+  if (/\b(ayer|el dia anterior|dia anterior|anoche)\b/.test(normalized)) return getBogotaRelativeDayRange(-1)
+  if (/\b(anteayer|antier)\b/.test(normalized)) return getBogotaRelativeDayRange(-2)
   if (/\b(mes\s+pasado|mes\s+anterior|anterior\s+mes)\b/.test(normalized)) return getBogotaPreviousMonthRange()
 
   const monthByName = parseSalesMetricsMonthByName(normalized)
@@ -468,6 +483,8 @@ const getSalesMetricsSummary = async (companyId: string, period: DateRange) => {
       companyId,
       page: journalPage,
       limit: journalLimit,
+      status: JournalEntryStatus.PROCESSED,
+      eventType: EventType.SALE,
       from: journalRange.from,
       to: journalRange.to,
     })
@@ -491,6 +508,7 @@ const getSalesMetricsSummary = async (companyId: string, period: DateRange) => {
     const invoicePageResult = await pendingEventRepository.listByCompany({
       companyId,
       eventType: 'invoice_signature',
+      statuses: ['CONFIRMED'],
       from: inventoryRange.from,
       to: inventoryRange.to,
       page: invoicePage,
@@ -510,7 +528,12 @@ const getSalesMetricsSummary = async (companyId: string, period: DateRange) => {
     invoicePage += 1
   }
 
-  const totalSalesMoney = totalSalesMoneyFromInvoices > 0 ? totalSalesMoneyFromInvoices : totalSalesMoneyFromJournal
+  const totalSalesMoney =
+    totalSalesMoneyFromJournal > 0
+      ? totalSalesMoneyFromJournal
+      : totalUnits > 0 && totalSalesMoneyFromInvoices > 0
+        ? totalSalesMoneyFromInvoices
+        : 0
 
   return {
     totalUnits,
@@ -901,6 +924,11 @@ const isGuidedCustomerCommand = (value: string) => {
 const isGuidedInvoiceIssuerCommand = (value: string) => {
   const text = normalizeText(value)
   return /\b(llenar datos de la empresa|datos de la empresa|configurar datos de la empresa|configurar empresa|datos de factura|configurar factura)\b/.test(text)
+}
+
+const isPasswordResetCommand = (value: string) => {
+  const text = normalizeText(value)
+  return /\b(cambiar|restablecer|resetear|olvide|olvide mi|recuperar)\b.*\b(contrasena|clave)\b/.test(text)
 }
 
 const parseCustomerCreateMessage = (
@@ -5413,6 +5441,30 @@ router.post('/sign-session/:pendingId/submit', async (req: Request, res: Respons
   })
 })
 
+const sendPasswordResetLinkToTelegramUser = async (chatId: number): Promise<void> => {
+  const user = await userRepository.findByTelegramId(chatId)
+  if (!user) {
+    await TelegramClient.sendMessage({
+      chatId,
+      text: `No tienes un usuario asignado. Envia este ID a soporte: ${chatId}`,
+    })
+    return
+  }
+
+  const issued = await issuePasswordResetLink({
+    userId: user.id,
+    companyId: user.companyId,
+    requestedByUserId: user.id,
+  })
+  const telegramPayload = buildPasswordResetTelegramPayload(issued.resetUrl, issued.expiresAt)
+
+  await TelegramClient.sendMessage({
+    chatId,
+    text: telegramPayload.text,
+    replyMarkup: telegramPayload.replyMarkup,
+  })
+}
+
 router.post('/webhook', async (req: Request, res: Response) => {
   const update = req.body
   const chatId: number | null = update?.message?.chat?.id ?? update?.callback_query?.message?.chat?.id ?? null
@@ -5648,6 +5700,16 @@ router.post('/webhook', async (req: Request, res: Response) => {
           await TelegramClient.sendMessage({ chatId, text: 'Firma de factura cancelada. La venta quedó registrada.' })
           return res.status(200).json({ ok: true })
         }
+      }
+
+      if (isPasswordResetCommand(textForCommand)) {
+        try {
+          await sendPasswordResetLinkToTelegramUser(chatId)
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Error interno'
+          await TelegramClient.sendMessage({ chatId, text: `No pude generar el enlace de recuperacion: ${message}` })
+        }
+        return res.status(200).json({ ok: true })
       }
 
       const guided = await pendingEventRepository.findLatestPendingByTelegramUserId(chatId, 'sale_guided')

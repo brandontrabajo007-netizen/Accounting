@@ -20,7 +20,9 @@ const aiSaleItemsParser_1 = require("@application/parsers/aiSaleItemsParser");
 const generateIncomeStatement_1 = require("@application/reports/use-cases/generateIncomeStatement");
 const AccountingPeriodStatus_1 = require("@domain/accounting-periods/AccountingPeriodStatus");
 const EventType_enum_1 = require("@domain/events/EventType.enum");
+const JournalEntryStatus_1 = require("@domain/journal-entries/JournalEntryStatus");
 const invoicePdfGenerator_1 = require("@infra/pdf/invoicePdfGenerator");
+const passwordReset_1 = require("@infra/security/passwordReset");
 const telegramAdapter_1 = require("@infra/telegram/telegramAdapter");
 const telegramClient_1 = require("@infra/telegram/telegramClient");
 const whatsappClient_1 = require("@infra/whatsapp/whatsappClient");
@@ -154,6 +156,10 @@ Con mis superpoderes puedo:
 "Crear cliente: Juan Pérez, cédula: 123456789, teléfono: 3001234567, ciudad: Cali, dirección: Cra 10 # 20-30"
 "Consultar cliente: Juan Pérez"
 
+🔐 *Cambiar contraseña:*
+"Cambiar contraseña"
+"Olvidé mi contraseña"
+
 🏢 *Datos de la empresa para factura:*
 "Llenar datos de la empresa"
 
@@ -193,6 +199,12 @@ const bogotaDateFormatter = new Intl.DateTimeFormat('en-CA', {
 const getBogotaTodayRange = () => {
     const today = bogotaDateFormatter.format(new Date());
     return { start: today, end: today };
+};
+const getBogotaRelativeDayRange = (offsetDays) => {
+    const base = getBogotaTodayUtc();
+    base.setUTCDate(base.getUTCDate() + offsetDays);
+    const day = toDateString(base);
+    return { start: day, end: day };
 };
 const toDateString = (date) => date.toISOString().slice(0, 10);
 const getBogotaTodayUtc = () => {
@@ -256,6 +268,10 @@ const parseSalesMetricsMonthByName = (normalized) => {
 };
 const parseSalesMetricsPeriod = (value) => {
     const normalized = normalizeText(value);
+    if (/\b(ayer|el dia anterior|dia anterior|anoche)\b/.test(normalized))
+        return getBogotaRelativeDayRange(-1);
+    if (/\b(anteayer|antier)\b/.test(normalized))
+        return getBogotaRelativeDayRange(-2);
     if (/\b(mes\s+pasado|mes\s+anterior|anterior\s+mes)\b/.test(normalized))
         return getBogotaPreviousMonthRange();
     const monthByName = parseSalesMetricsMonthByName(normalized);
@@ -383,6 +399,8 @@ const getSalesMetricsSummary = async (companyId, period) => {
             companyId,
             page: journalPage,
             limit: journalLimit,
+            status: JournalEntryStatus_1.JournalEntryStatus.PROCESSED,
+            eventType: EventType_enum_1.EventType.SALE,
             from: journalRange.from,
             to: journalRange.to,
         });
@@ -403,6 +421,7 @@ const getSalesMetricsSummary = async (companyId, period) => {
         const invoicePageResult = await dependencies_1.pendingEventRepository.listByCompany({
             companyId,
             eventType: 'invoice_signature',
+            statuses: ['CONFIRMED'],
             from: inventoryRange.from,
             to: inventoryRange.to,
             page: invoicePage,
@@ -420,7 +439,11 @@ const getSalesMetricsSummary = async (companyId, period) => {
             break;
         invoicePage += 1;
     }
-    const totalSalesMoney = totalSalesMoneyFromInvoices > 0 ? totalSalesMoneyFromInvoices : totalSalesMoneyFromJournal;
+    const totalSalesMoney = totalSalesMoneyFromJournal > 0
+        ? totalSalesMoneyFromJournal
+        : totalUnits > 0 && totalSalesMoneyFromInvoices > 0
+            ? totalSalesMoneyFromInvoices
+            : 0;
     return {
         totalUnits,
         topProductName: topProduct?.productName ?? null,
@@ -670,6 +693,10 @@ const isGuidedCustomerCommand = (value) => {
 const isGuidedInvoiceIssuerCommand = (value) => {
     const text = normalizeText(value);
     return /\b(llenar datos de la empresa|datos de la empresa|configurar datos de la empresa|configurar empresa|datos de factura|configurar factura)\b/.test(text);
+};
+const isPasswordResetCommand = (value) => {
+    const text = normalizeText(value);
+    return /\b(cambiar|restablecer|resetear|olvide|olvide mi|recuperar)\b.*\b(contrasena|clave)\b/.test(text);
 };
 const parseCustomerCreateMessage = (rawText) => {
     const text = rawText.trim();
@@ -4562,6 +4589,27 @@ router.post('/sign-session/:pendingId/submit', async (req, res) => {
         message: nextStep === 'done' ? 'Firmas completadas.' : 'Firma guardada. Ahora debe firmar el cliente.',
     });
 });
+const sendPasswordResetLinkToTelegramUser = async (chatId) => {
+    const user = await dependencies_1.userRepository.findByTelegramId(chatId);
+    if (!user) {
+        await telegramClient_1.TelegramClient.sendMessage({
+            chatId,
+            text: `No tienes un usuario asignado. Envia este ID a soporte: ${chatId}`,
+        });
+        return;
+    }
+    const issued = await (0, passwordReset_1.issuePasswordResetLink)({
+        userId: user.id,
+        companyId: user.companyId,
+        requestedByUserId: user.id,
+    });
+    const telegramPayload = (0, passwordReset_1.buildPasswordResetTelegramPayload)(issued.resetUrl, issued.expiresAt);
+    await telegramClient_1.TelegramClient.sendMessage({
+        chatId,
+        text: telegramPayload.text,
+        replyMarkup: telegramPayload.replyMarkup,
+    });
+};
 router.post('/webhook', async (req, res) => {
     const update = req.body;
     const chatId = update?.message?.chat?.id ?? update?.callback_query?.message?.chat?.id ?? null;
@@ -4749,6 +4797,16 @@ router.post('/webhook', async (req, res) => {
                     await telegramClient_1.TelegramClient.sendMessage({ chatId, text: 'Firma de factura cancelada. La venta quedó registrada.' });
                     return res.status(200).json({ ok: true });
                 }
+            }
+            if (isPasswordResetCommand(textForCommand)) {
+                try {
+                    await sendPasswordResetLinkToTelegramUser(chatId);
+                }
+                catch (err) {
+                    const message = err instanceof Error ? err.message : 'Error interno';
+                    await telegramClient_1.TelegramClient.sendMessage({ chatId, text: `No pude generar el enlace de recuperacion: ${message}` });
+                }
+                return res.status(200).json({ ok: true });
             }
             const guided = await dependencies_1.pendingEventRepository.findLatestPendingByTelegramUserId(chatId, 'sale_guided');
             if (guided && rawText) {
