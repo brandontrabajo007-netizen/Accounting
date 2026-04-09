@@ -6,6 +6,7 @@ import type { SaleAccountMappingDocument } from '../models/saleAccountMapping.mo
 export const mongoToSaleAccountConfig = (doc: SaleAccountMappingDocument): SaleAccountConfig => ({
   companyId: doc.companyId,
   cashAccount: doc.cashAccount,
+  bankAccount: doc.bankAccount ?? undefined,
   incomeAccount: doc.incomeAccount,
   vatAccount: doc.vatAccount ?? undefined,
   cogsAccount: doc.cogsAccount ?? undefined,

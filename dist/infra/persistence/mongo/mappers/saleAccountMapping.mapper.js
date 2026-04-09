@@ -5,6 +5,7 @@ exports.mongoToSaleAccountConfig = void 0;
 const mongoToSaleAccountConfig = (doc) => ({
     companyId: doc.companyId,
     cashAccount: doc.cashAccount,
+    bankAccount: doc.bankAccount ?? undefined,
     incomeAccount: doc.incomeAccount,
     vatAccount: doc.vatAccount ?? undefined,
     cogsAccount: doc.cogsAccount ?? undefined,

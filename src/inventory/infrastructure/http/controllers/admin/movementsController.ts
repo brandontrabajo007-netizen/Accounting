@@ -4,6 +4,7 @@ import { listMovementsQuerySchema } from '../../validation/adminSchemas'
 import { serializeMovement } from '../../serializers/movementSerializers'
 import { ProductId } from '../../../../domain/value-objects/ProductId'
 import { VariantId } from '../../../../domain/value-objects/VariantId'
+import { ProductModel } from '../../../db/mongo/models/ProductModel'
 
 const dateOnlyPattern = /^\d{4}-\d{2}-\d{2}$/
 
@@ -43,8 +44,14 @@ export async function listMovementsHandler(req: Request, res: Response) {
     pageSize: query.pageSize,
   })
 
+  const productIds = Array.from(new Set(result.items.map((item) => String(item.productId))))
+  const products = productIds.length > 0
+    ? await ProductModel.find({ companyId, _id: { $in: productIds } }).select({ _id: 1, name: 1, sku: 1 }).lean().exec()
+    : []
+  const productMap = new Map(products.map((product) => [product._id, { name: product.name, sku: product.sku }]))
+
   return res.json({
-    items: result.items.map(serializeMovement),
+    items: result.items.map((movement) => serializeMovement(movement, productMap.get(String(movement.productId)))),
     page: query.page,
     pageSize: query.pageSize,
     total: result.total,

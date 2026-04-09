@@ -6,6 +6,7 @@ const mongoose_1 = require("mongoose");
 const saleAccountMappingSchema = new mongoose_1.Schema({
     companyId: { type: String, required: true, unique: true },
     cashAccount: { type: Number, required: true },
+    bankAccount: { type: Number },
     incomeAccount: { type: Number, required: true },
     vatAccount: { type: Number },
     cogsAccount: { type: Number },

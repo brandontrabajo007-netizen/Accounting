@@ -27,16 +27,28 @@ const isCreditSale = (paymentMethod: string | null | undefined) => {
   return /(credito|a credito|al credito)/.test(normalized)
 }
 
+const chooseLiquidAssetAccount = (paymentMethod: string | null | undefined, accounts: SaleAccountConfig): number => {
+  if (accounts.bankAccount && !accounts.cashAccount) return accounts.bankAccount
+  if (accounts.cashAccount && !accounts.bankAccount) return accounts.cashAccount
+
+  const normalized = paymentMethod ? normalize(paymentMethod) : ''
+  if (normalized && /(banco|transferencia|transfer|tarjeta|nequi|daviplata|pse)/.test(normalized)) {
+    return accounts.bankAccount ?? accounts.cashAccount
+  }
+
+  return accounts.cashAccount ?? accounts.bankAccount ?? 0
+}
+
 export const generateSaleJournalEntry = (event: SaleEvent, accounts: SaleAccountConfig, accountsCatalog: Account[]): JournalEntry => {
   const totalAmount = event.totalAmount > 0 ? event.totalAmount : 0
   const movements: Movement[] = []
 
   // Entrada (caja / banco) o clientes (AR)
   const isCredit = isCreditSale(event.paymentMethod)
-  const debitAccount = isCredit ? accounts.accountsReceivableAccount : accounts.cashAccount
+  const debitAccount = isCredit ? accounts.accountsReceivableAccount : chooseLiquidAssetAccount(event.paymentMethod, accounts)
 
   if (!debitAccount) {
-    throw new Error(isCredit ? 'No hay cuenta de clientes configurada para ventas a credito' : 'No hay cuenta de caja configurada para ventas')
+    throw new Error(isCredit ? 'No hay cuenta de clientes configurada para ventas a credito' : 'No hay cuenta de caja o banco configurada para ventas')
   }
 
   movements.push({

@@ -18,6 +18,9 @@ export const validateSaleAccount = (mapping: SaleAccountConfig, accountsCatalog:
   } else {
     validateAccount('cashAccount', mapping.cashAccount, accountsCatalog, AccountType.ASSET)
   }
+  if (mapping.bankAccount) {
+    validateAccount('bankAccount', mapping.bankAccount, accountsCatalog, AccountType.ASSET)
+  }
 
   validateAccount('incomeAccount', mapping.incomeAccount, accountsCatalog, AccountType.INCOME)
   validateAccount('vatAccount', mapping.vatAccount, accountsCatalog, AccountType.LIABILITY)

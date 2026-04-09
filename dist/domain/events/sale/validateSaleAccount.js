@@ -17,6 +17,9 @@ const validateSaleAccount = (mapping, accountsCatalog, event) => {
     else {
         (0, validateAccount_1.validateAccount)('cashAccount', mapping.cashAccount, accountsCatalog, AccountType_1.AccountType.ASSET);
     }
+    if (mapping.bankAccount) {
+        (0, validateAccount_1.validateAccount)('bankAccount', mapping.bankAccount, accountsCatalog, AccountType_1.AccountType.ASSET);
+    }
     (0, validateAccount_1.validateAccount)('incomeAccount', mapping.incomeAccount, accountsCatalog, AccountType_1.AccountType.INCOME);
     (0, validateAccount_1.validateAccount)('vatAccount', mapping.vatAccount, accountsCatalog, AccountType_1.AccountType.LIABILITY);
     if (event?.includesCost) {

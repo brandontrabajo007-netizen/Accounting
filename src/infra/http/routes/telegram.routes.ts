@@ -1099,16 +1099,22 @@ const parseYesNo = (value: string): boolean | null => {
 
 const parseDateInput = (value: string): string | null => {
   const text = normalizeText(value)
-  const now = new Date()
+  const todayBogota = getBogotaTodayUtc()
 
   if (text.includes('hoy')) {
-    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString().slice(0, 10)
+    return toDateString(todayBogota)
   }
 
   if (text.includes('manana') || text.includes('mañana')) {
-    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+    const d = new Date(todayBogota)
     d.setUTCDate(d.getUTCDate() + 1)
-    return d.toISOString().slice(0, 10)
+    return toDateString(d)
+  }
+
+  if (text.includes('ayer') || text.includes('anoche')) {
+    const d = new Date(todayBogota)
+    d.setUTCDate(d.getUTCDate() - 1)
+    return toDateString(d)
   }
 
   const isoMatch = text.match(/\b(\d{4})-(\d{2})-(\d{2})\b/)
@@ -1985,7 +1991,7 @@ const askGuidedSaleCreditDueDate = async (chatId: number) => {
 const askGuidedSaleDate = async (chatId: number) => {
   await TelegramClient.sendMessage({
     chatId,
-    text: '¿Cuándo fue la venta? (YYYY-MM-DD o "hoy")',
+    text: '¿Cuándo fue la venta? (YYYY-MM-DD, "hoy" o "ayer")',
   })
 }
 
