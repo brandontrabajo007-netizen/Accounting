@@ -1589,6 +1589,23 @@ const askGuidedSaleProduct = async (chatId) => {
         text: '¿Qué producto vendiste? Escribe el nombre o una parte del nombre.',
     });
 };
+const sendGuidedSaleProductOptions = async (chatId, title, options) => {
+    if (options.length === 0)
+        return;
+    const chunkSize = 40;
+    const totalChunks = Math.ceil(options.length / chunkSize);
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+        const start = chunkIndex * chunkSize;
+        const chunk = options.slice(start, start + chunkSize);
+        const lines = chunk.map((product, localIndex) => `${start + localIndex + 1}) ${product.name}`).join('\n');
+        const header = chunkIndex === 0 ? title : `Continuacion (${chunkIndex + 1}/${totalChunks}):`;
+        const footer = chunkIndex === totalChunks - 1 ? '\nResponde con el numero.' : '';
+        await telegramClient_1.TelegramClient.sendMessage({
+            chatId,
+            text: `${header}\n${lines}${footer}`,
+        });
+    }
+};
 const isSimpleGuidedSale = (meta) => meta.inventoryMode === 'SIMPLE';
 const shouldBypassGuidedAddMore = (meta) => meta.skipAddMore === true || (meta.fastMode === true && !isSimpleGuidedSale(meta));
 const buildSimpleGuidedVariant = (qty, unitPrice = null) => ({
@@ -1642,25 +1659,30 @@ const askGuidedSaleAddMore = async (chatId) => {
         replyMarkup: buildYesNoKeyboard(),
     });
 };
-const askGuidedSalePrice = async (chatId) => {
+const askGuidedSalePrice = async (chatId, productName) => {
+    const title = productName?.trim() ? ` de *${productName.trim()}*` : '';
     await telegramClient_1.TelegramClient.sendMessage({
         chatId,
-        text: '¿El precio es igual para todas las variantes de este producto? (si/no)',
+        text: `¿El precio es igual para todas las variantes${title}? (si/no)`,
+        parseMode: 'Markdown',
         replyMarkup: buildYesNoKeyboard(),
     });
 };
-const askGuidedSalePriceType = async (chatId) => {
+const askGuidedSalePriceType = async (chatId, productName) => {
+    const prefix = productName?.trim() ? `Para *${productName.trim()}*, ` : '';
     await telegramClient_1.TelegramClient.sendMessage({
         chatId,
-        text: '¿Ese valor es *unitario* o *total*?',
+        text: `${prefix}¿ese valor es *unitario* o *total*?`,
         parseMode: 'Markdown',
         replyMarkup: buildUnitTotalKeyboard(),
     });
 };
-const askGuidedSalePriceValue = async (chatId) => {
+const askGuidedSalePriceValue = async (chatId, productName) => {
+    const target = productName?.trim() ? ` de *${productName.trim()}*` : '';
     await telegramClient_1.TelegramClient.sendMessage({
         chatId,
-        text: '¿Cuál es el precio? Puedes decir: "70000 cada uno" o "70000 total".',
+        text: `¿Cuál es el precio${target}? Puedes decir: "70000 cada uno" o "70000 total".`,
+        parseMode: 'Markdown',
     });
 };
 const askGuidedSaleVariantPrices = async (chatId, productName, variants) => {
@@ -1928,7 +1950,7 @@ const formatInventoryConfirmErrorMessage = (data, error) => {
     lines.push('Ajusta esa cantidad y vuelve a confirmar.');
     return lines.join('\n');
 };
-const advanceAfterItems = async (pendingId, chatId, data, meta) => {
+const advanceAfterItems = async (pendingId, chatId, data, meta, promptAddMoreWhenReady = false) => {
     meta.currentProductId = undefined;
     meta.currentProductName = undefined;
     meta.candidateVariants = undefined;
@@ -1944,13 +1966,19 @@ const advanceAfterItems = async (pendingId, chatId, data, meta) => {
             meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode';
             await updateGuidedSaleState(pendingId, data, meta);
             if (isSimpleGuidedSale(meta)) {
-                await askGuidedSalePriceValue(chatId);
+                await askGuidedSalePriceValue(chatId, meta.currentProductName);
             }
             else {
-                await askGuidedSalePrice(chatId);
+                await askGuidedSalePrice(chatId, meta.currentProductName);
             }
             return true;
         }
+    }
+    if (promptAddMoreWhenReady && !shouldBypassGuidedAddMore(meta)) {
+        meta.step = 'add_more';
+        await updateGuidedSaleState(pendingId, data, meta);
+        await askGuidedSaleAddMore(chatId);
+        return true;
     }
     if (data.paymentMethod && /credito|cr[eÃƒÂ©]dito/.test(normalizeText(data.paymentMethod)) && !data.creditDueDate) {
         meta.step = 'credit_due';
@@ -2051,10 +2079,10 @@ const applyGuidedVariantSelection = async (pendingId, chatId, data, meta, varian
             meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode';
             await updateGuidedSaleState(pendingId, data, meta);
             if (isSimpleGuidedSale(meta)) {
-                await askGuidedSalePriceValue(chatId);
+                await askGuidedSalePriceValue(chatId, currentProductName);
             }
             else {
-                await askGuidedSalePrice(chatId);
+                await askGuidedSalePrice(chatId, currentProductName);
             }
             return true;
         }
@@ -2063,25 +2091,16 @@ const applyGuidedVariantSelection = async (pendingId, chatId, data, meta, varian
         meta.autoPriceApply = false;
         data.unitPrice = null;
         data.totalAmount = null;
-        if (shouldBypassGuidedAddMore(meta)) {
-            return await advanceAfterItems(pendingId, chatId, data, meta);
-        }
-        meta.step = 'add_more';
-        meta.currentProductId = undefined;
-        meta.currentProductName = undefined;
-        meta.candidateVariants = undefined;
-        meta.candidateProducts = undefined;
-        clearGuidedVariantWizard(meta);
-        await updateGuidedSaleState(pendingId, data, meta);
-        await askGuidedSaleAddMore(chatId);
-        return true;
+        return await advanceAfterItems(pendingId, chatId, data, meta, true);
     }
     if (data.unitPrice || data.totalAmount) {
         meta.step = 'price_apply_parsed';
         await updateGuidedSaleState(pendingId, data, meta);
+        const productLabel = meta.currentProductName?.trim() ? ` para *${meta.currentProductName.trim()}*` : ' para este producto';
         await telegramClient_1.TelegramClient.sendMessage({
             chatId,
-            text: 'Detecte un precio en tu mensaje. ¿Aplica para este producto?',
+            text: `Detecte un precio en tu mensaje. ¿Aplica${productLabel}?`,
+            parseMode: 'Markdown',
             replyMarkup: buildYesNoKeyboard(),
         });
         return true;
@@ -2089,10 +2108,10 @@ const applyGuidedVariantSelection = async (pendingId, chatId, data, meta, varian
     meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode';
     await updateGuidedSaleState(pendingId, data, meta);
     if (isSimpleGuidedSale(meta)) {
-        await askGuidedSalePriceValue(chatId);
+        await askGuidedSalePriceValue(chatId, meta.currentProductName);
     }
     else {
-        await askGuidedSalePrice(chatId);
+        await askGuidedSalePrice(chatId, meta.currentProductName);
     }
     return true;
 };
@@ -2111,10 +2130,10 @@ const continueAfterGuidedVariantPrices = async (pendingId, chatId, data, meta) =
                 clearGuidedVariantWizard(meta);
                 await updateGuidedSaleState(pendingId, data, meta);
                 if (isSimpleGuidedSale(meta)) {
-                    await askGuidedSalePriceValue(chatId);
+                    await askGuidedSalePriceValue(chatId, meta.currentProductName);
                 }
                 else {
-                    await askGuidedSalePrice(chatId);
+                    await askGuidedSalePrice(chatId, meta.currentProductName);
                 }
                 return true;
             }
@@ -2152,19 +2171,7 @@ const continueAfterGuidedVariantPrices = async (pendingId, chatId, data, meta) =
         await sendGuidedSaleConfirmation(pendingId, chatId, data, meta);
         return true;
     }
-    if (meta.skipAddMore) {
-        clearGuidedVariantWizard(meta);
-        return await advanceAfterItems(pendingId, chatId, data, meta);
-    }
-    meta.step = 'add_more';
-    meta.currentProductId = undefined;
-    meta.currentProductName = undefined;
-    meta.candidateVariants = undefined;
-    meta.candidateProducts = undefined;
-    clearGuidedVariantWizard(meta);
-    await updateGuidedSaleState(pendingId, data, meta);
-    await askGuidedSaleAddMore(chatId);
-    return true;
+    return await advanceAfterItems(pendingId, chatId, data, meta, true);
 };
 const buildCandidateVariantsFromItem = (item) => item.variants.map((variant) => ({
     id: variant.variantId,
@@ -2877,6 +2884,32 @@ const sendProductListMessage = async (chatId, companyId) => {
         text: `Productos disponibles:\n${lines.join('\n')}`,
     });
 };
+const PRODUCT_FETCH_PAGE_SIZE = 200;
+const PRODUCT_FETCH_MAX_PAGES = 100;
+const listAllActiveProducts = async (companyId) => {
+    const collected = [];
+    let page = 1;
+    let total = 0;
+    while (page <= PRODUCT_FETCH_MAX_PAGES) {
+        const result = await dependencies_1.inventoryGateway.listProducts({
+            companyId,
+            q: undefined,
+            active: true,
+            page,
+            pageSize: PRODUCT_FETCH_PAGE_SIZE,
+        });
+        total = result.total;
+        if (result.items.length === 0)
+            break;
+        collected.push(...result.items);
+        if (collected.length >= total)
+            break;
+        if (result.items.length < PRODUCT_FETCH_PAGE_SIZE)
+            break;
+        page += 1;
+    }
+    return collected;
+};
 const resolveProductByName = async (companyId, name) => {
     const normalizeToken = (value) => {
         let token = normalizeText(value);
@@ -2904,22 +2937,7 @@ const resolveProductByName = async (companyId, name) => {
     if (items.length === 0) {
         const normalized = normalizeText(name);
         const inputTokens = buildTokens(name);
-        const allItems = [];
-        const maxPages = 6;
-        for (let page = 1; page <= maxPages; page += 1) {
-            const fallback = await dependencies_1.inventoryGateway.listProducts({
-                companyId,
-                q: undefined,
-                active: true,
-                page,
-                pageSize: 200,
-            });
-            if (fallback.items.length === 0)
-                break;
-            allItems.push(...fallback.items);
-            if (fallback.items.length < 200)
-                break;
-        }
+        const allItems = await listAllActiveProducts(companyId);
         const filtered = allItems.filter((item) => {
             const nameNorm = normalizeText(item.name);
             const skuNorm = normalizeText(item.sku.toString());
@@ -3268,11 +3286,11 @@ const startFastSaleFromText = async (chatId, companyId, rawText, options) => {
         return true;
     }
     if (meta.step === 'price_mode') {
-        await askGuidedSalePrice(chatId);
+        await askGuidedSalePrice(chatId, meta.currentProductName);
         return true;
     }
     if (meta.step === 'price_same') {
-        await askGuidedSalePriceValue(chatId);
+        await askGuidedSalePriceValue(chatId, meta.currentProductName);
         return true;
     }
     if (meta.step === 'add_more') {
@@ -3369,10 +3387,10 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode';
             await updateGuidedSaleState(pending.id, data, meta);
             if (isSimpleGuidedSale(meta)) {
-                await askGuidedSalePriceValue(chatId);
+                await askGuidedSalePriceValue(chatId, meta.currentProductName);
             }
             else {
-                await askGuidedSalePrice(chatId);
+                await askGuidedSalePrice(chatId, meta.currentProductName);
             }
             return true;
         }
@@ -3430,31 +3448,26 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             pageSize: 10,
         });
         let candidates = items;
+        let cachedAllActiveProducts = null;
+        const getAllActiveProducts = async () => {
+            if (cachedAllActiveProducts)
+                return cachedAllActiveProducts;
+            cachedAllActiveProducts = await listAllActiveProducts(pending.companyId);
+            return cachedAllActiveProducts;
+        };
         if (candidates.length === 0) {
-            const fallback = await dependencies_1.inventoryGateway.listProducts({
-                companyId: pending.companyId,
-                q: undefined,
-                active: true,
-                page: 1,
-                pageSize: 200,
-            });
+            const fallbackItems = await getAllActiveProducts();
             const normalized = normalizeText(text);
-            candidates = fallback.items.filter((item) => {
+            candidates = fallbackItems.filter((item) => {
                 const nameNorm = normalizeText(item.name);
                 const skuNorm = normalizeText(item.sku.toString());
                 return nameNorm.includes(normalized) || skuNorm.includes(normalized);
             });
         }
         if (candidates.length === 0) {
-            const fallback = await dependencies_1.inventoryGateway.listProducts({
-                companyId: pending.companyId,
-                q: undefined,
-                active: true,
-                page: 1,
-                pageSize: 50,
-            });
+            const fallbackItems = await getAllActiveProducts();
             const skuInput = normalizeText(text);
-            const skuMatch = fallback.items.find((item) => normalizeText(item.sku.toString()) === skuInput);
+            const skuMatch = fallbackItems.find((item) => normalizeText(item.sku.toString()) === skuInput);
             if (skuMatch) {
                 meta.currentProductId = skuMatch.id.toString();
                 meta.currentProductName = skuMatch.name;
@@ -3479,18 +3492,14 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
                 await askGuidedSaleVariants(chatId, skuMatch.name, meta.candidateVariants, meta.pendingTotalQty ?? null);
                 return true;
             }
-            if (fallback.items.length === 0) {
+            if (fallbackItems.length === 0) {
                 await telegramClient_1.TelegramClient.sendMessage({ chatId, text: 'No tienes productos activos.' });
                 return true;
             }
             meta.step = 'product_select';
-            meta.candidateProducts = fallback.items.map((product) => ({ id: product.id.toString(), name: product.name }));
+            meta.candidateProducts = fallbackItems.map((product) => ({ id: product.id.toString(), name: product.name }));
             await updateGuidedSaleState(pending.id, data, meta);
-            const list = meta.candidateProducts.map((product, index) => `${index + 1}) ${product.name}`).join('\n');
-            await telegramClient_1.TelegramClient.sendMessage({
-                chatId,
-                text: `No encontre ese producto. Elige de la lista:\n${list}\nResponde con el numero.`,
-            });
+            await sendGuidedSaleProductOptions(chatId, 'No encontre ese producto. Elige de la lista:', meta.candidateProducts);
             return true;
         }
         if (candidates.length === 1) {
@@ -3521,8 +3530,7 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
         meta.step = 'product_select';
         meta.candidateProducts = candidates.map((product) => ({ id: product.id.toString(), name: product.name }));
         await updateGuidedSaleState(pending.id, data, meta);
-        const list = meta.candidateProducts.map((product, index) => `${index + 1}) ${product.name}`).join('\n');
-        await telegramClient_1.TelegramClient.sendMessage({ chatId, text: `Encontre varios productos:\n${list}\nResponde con el numero.` });
+        await sendGuidedSaleProductOptions(chatId, 'Encontre varios productos:', meta.candidateProducts);
         return true;
     }
     if (meta.step === 'quantity' && meta.currentProductId && meta.currentProductName) {
@@ -3667,10 +3675,10 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
                 data.totalAmount = null;
                 await updateGuidedSaleState(pending.id, data, meta);
                 if (isSimpleGuidedSale(meta)) {
-                    await askGuidedSalePriceValue(chatId);
+                    await askGuidedSalePriceValue(chatId, meta.currentProductName);
                 }
                 else {
-                    await askGuidedSalePrice(chatId);
+                    await askGuidedSalePrice(chatId, meta.currentProductName);
                 }
                 return true;
             }
@@ -3682,28 +3690,17 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             }
             data.unitPrice = null;
             data.totalAmount = null;
-            if (shouldBypassGuidedAddMore(meta)) {
-                return await advanceAfterItems(pending.id, chatId, data, meta);
-            }
-            meta.step = 'add_more';
-            meta.currentProductId = undefined;
-            meta.currentProductName = undefined;
-            meta.candidateVariants = undefined;
-            meta.candidateProducts = undefined;
-            clearGuidedVariantWizard(meta);
-            await updateGuidedSaleState(pending.id, data, meta);
-            await askGuidedSaleAddMore(chatId);
-            return true;
+            return await advanceAfterItems(pending.id, chatId, data, meta, true);
         }
         meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode';
         data.unitPrice = null;
         data.totalAmount = null;
         await updateGuidedSaleState(pending.id, data, meta);
         if (isSimpleGuidedSale(meta)) {
-            await askGuidedSalePriceValue(chatId);
+            await askGuidedSalePriceValue(chatId, meta.currentProductName);
         }
         else {
-            await askGuidedSalePrice(chatId);
+            await askGuidedSalePrice(chatId, meta.currentProductName);
         }
         return true;
     }
@@ -3711,7 +3708,7 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
         if (isSimpleGuidedSale(meta)) {
             meta.step = 'price_same';
             await updateGuidedSaleState(pending.id, data, meta);
-            await askGuidedSalePriceValue(chatId);
+            await askGuidedSalePriceValue(chatId, meta.currentProductName);
             return true;
         }
         if (!meta.currentProductId) {
@@ -3737,7 +3734,7 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
         if (answer) {
             meta.step = 'price_same';
             await updateGuidedSaleState(pending.id, data, meta);
-            await askGuidedSalePriceValue(chatId);
+            await askGuidedSalePriceValue(chatId, meta.currentProductName);
             return true;
         }
         meta.step = 'price_variants';
@@ -3783,24 +3780,13 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             meta.pendingPriceScope = null;
             data.unitPrice = null;
             data.totalAmount = null;
-            if (shouldBypassGuidedAddMore(meta)) {
-                return await advanceAfterItems(pending.id, chatId, data, meta);
-            }
-            meta.step = 'add_more';
-            meta.currentProductId = undefined;
-            meta.currentProductName = undefined;
-            meta.candidateVariants = undefined;
-            meta.candidateProducts = undefined;
-            clearGuidedVariantWizard(meta);
-            await updateGuidedSaleState(pending.id, data, meta);
-            await askGuidedSaleAddMore(chatId);
-            return true;
+            return await advanceAfterItems(pending.id, chatId, data, meta, true);
         }
         meta.pendingPriceAmount = amount;
         meta.pendingPriceScope = null;
         meta.step = 'price_same_type';
         await updateGuidedSaleState(pending.id, data, meta);
-        await askGuidedSalePriceType(chatId);
+        await askGuidedSalePriceType(chatId, meta.currentProductName);
         return true;
     }
     if (meta.step === 'price_same_type') {
@@ -3808,7 +3794,7 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
         if (amount <= 0) {
             meta.step = 'price_same';
             await updateGuidedSaleState(pending.id, data, meta);
-            await askGuidedSalePriceValue(chatId);
+            await askGuidedSalePriceValue(chatId, meta.currentProductName);
             return true;
         }
         let scope = meta.pendingPriceScope;
@@ -3819,7 +3805,8 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
                 scope = 'total';
         }
         if (!scope) {
-            await telegramClient_1.TelegramClient.sendMessage({ chatId, text: 'Responde "unitario" o "total".' });
+            const productHint = meta.currentProductName?.trim() ? ` para ${meta.currentProductName.trim()}` : '';
+            await telegramClient_1.TelegramClient.sendMessage({ chatId, text: `Responde "unitario" o "total"${productHint}.` });
             return true;
         }
         const targetItem = meta.currentProductId ? data.items.find((item) => item.productId === meta.currentProductId) : null;
@@ -3847,10 +3834,10 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
                     meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode';
                     await updateGuidedSaleState(pending.id, data, meta);
                     if (isSimpleGuidedSale(meta)) {
-                        await askGuidedSalePriceValue(chatId);
+                        await askGuidedSalePriceValue(chatId, meta.currentProductName);
                     }
                     else {
-                        await askGuidedSalePrice(chatId);
+                        await askGuidedSalePrice(chatId, meta.currentProductName);
                     }
                     return true;
                 }
@@ -3888,18 +3875,7 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
             await sendGuidedSaleConfirmation(pending.id, chatId, data, meta);
             return true;
         }
-        if (meta.skipAddMore) {
-            return await advanceAfterItems(pending.id, chatId, data, meta);
-        }
-        meta.step = 'add_more';
-        meta.currentProductId = undefined;
-        meta.currentProductName = undefined;
-        meta.candidateVariants = undefined;
-        meta.candidateProducts = undefined;
-        clearGuidedVariantWizard(meta);
-        await updateGuidedSaleState(pending.id, data, meta);
-        await askGuidedSaleAddMore(chatId);
-        return true;
+        return await advanceAfterItems(pending.id, chatId, data, meta, true);
     }
     if (meta.step === 'price_variants') {
         if (!meta.candidateVariants || !meta.currentProductId) {
@@ -4093,10 +4069,10 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
         meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode';
         await updateGuidedSaleState(pending.id, data, meta);
         if (isSimpleGuidedSale(meta)) {
-            await askGuidedSalePriceValue(chatId);
+            await askGuidedSalePriceValue(chatId, meta.currentProductName);
         }
         else {
-            await askGuidedSalePrice(chatId);
+            await askGuidedSalePrice(chatId, meta.currentProductName);
         }
         return true;
     }

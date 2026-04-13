@@ -2003,6 +2003,24 @@ const askGuidedSaleProduct = async (chatId: number) => {
   })
 }
 
+const sendGuidedSaleProductOptions = async (chatId: number, title: string, options: Array<{ id: string; name: string }>) => {
+  if (options.length === 0) return
+  const chunkSize = 40
+  const totalChunks = Math.ceil(options.length / chunkSize)
+
+  for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+    const start = chunkIndex * chunkSize
+    const chunk = options.slice(start, start + chunkSize)
+    const lines = chunk.map((product, localIndex) => `${start + localIndex + 1}) ${product.name}`).join('\n')
+    const header = chunkIndex === 0 ? title : `Continuacion (${chunkIndex + 1}/${totalChunks}):`
+    const footer = chunkIndex === totalChunks - 1 ? '\nResponde con el numero.' : ''
+    await TelegramClient.sendMessage({
+      chatId,
+      text: `${header}\n${lines}${footer}`,
+    })
+  }
+}
+
 const isSimpleGuidedSale = (meta: GuidedSaleMetadata) => meta.inventoryMode === 'SIMPLE'
 
 const shouldBypassGuidedAddMore = (meta: GuidedSaleMetadata) =>
@@ -2078,27 +2096,32 @@ const askGuidedSaleAddMore = async (chatId: number) => {
   })
 }
 
-const askGuidedSalePrice = async (chatId: number) => {
+const askGuidedSalePrice = async (chatId: number, productName?: string) => {
+  const title = productName?.trim() ? ` de *${productName.trim()}*` : ''
   await TelegramClient.sendMessage({
     chatId,
-    text: '¿El precio es igual para todas las variantes de este producto? (si/no)',
+    text: `¿El precio es igual para todas las variantes${title}? (si/no)`,
+    parseMode: 'Markdown',
     replyMarkup: buildYesNoKeyboard(),
   })
 }
 
-const askGuidedSalePriceType = async (chatId: number) => {
+const askGuidedSalePriceType = async (chatId: number, productName?: string) => {
+  const prefix = productName?.trim() ? `Para *${productName.trim()}*, ` : ''
   await TelegramClient.sendMessage({
     chatId,
-    text: '¿Ese valor es *unitario* o *total*?',
+    text: `${prefix}¿ese valor es *unitario* o *total*?`,
     parseMode: 'Markdown',
     replyMarkup: buildUnitTotalKeyboard(),
   })
 }
 
-const askGuidedSalePriceValue = async (chatId: number) => {
+const askGuidedSalePriceValue = async (chatId: number, productName?: string) => {
+  const target = productName?.trim() ? ` de *${productName.trim()}*` : ''
   await TelegramClient.sendMessage({
     chatId,
-    text: '¿Cuál es el precio? Puedes decir: "70000 cada uno" o "70000 total".',
+    text: `¿Cuál es el precio${target}? Puedes decir: "70000 cada uno" o "70000 total".`,
+    parseMode: 'Markdown',
   })
 }
 
@@ -2410,7 +2433,13 @@ const formatInventoryConfirmErrorMessage = (data: GuidedSaleData, error: Invento
   return lines.join('\n')
 }
 
-const advanceAfterItems = async (pendingId: string, chatId: number, data: GuidedSaleData, meta: GuidedSaleMetadata) => {
+const advanceAfterItems = async (
+  pendingId: string,
+  chatId: number,
+  data: GuidedSaleData,
+  meta: GuidedSaleMetadata,
+  promptAddMoreWhenReady = false,
+) => {
   meta.currentProductId = undefined
   meta.currentProductName = undefined
   meta.candidateVariants = undefined
@@ -2427,12 +2456,19 @@ const advanceAfterItems = async (pendingId: string, chatId: number, data: Guided
       meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode'
       await updateGuidedSaleState(pendingId, data, meta)
       if (isSimpleGuidedSale(meta)) {
-        await askGuidedSalePriceValue(chatId)
+        await askGuidedSalePriceValue(chatId, meta.currentProductName)
       } else {
-        await askGuidedSalePrice(chatId)
+        await askGuidedSalePrice(chatId, meta.currentProductName)
       }
       return true
     }
+  }
+
+  if (promptAddMoreWhenReady && !shouldBypassGuidedAddMore(meta)) {
+    meta.step = 'add_more'
+    await updateGuidedSaleState(pendingId, data, meta)
+    await askGuidedSaleAddMore(chatId)
+    return true
   }
 
   if (data.paymentMethod && /credito|cr[eÃƒÂ©]dito/.test(normalizeText(data.paymentMethod)) && !data.creditDueDate) {
@@ -2556,9 +2592,9 @@ const applyGuidedVariantSelection = async (
       meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode'
       await updateGuidedSaleState(pendingId, data, meta)
       if (isSimpleGuidedSale(meta)) {
-        await askGuidedSalePriceValue(chatId)
+        await askGuidedSalePriceValue(chatId, currentProductName)
       } else {
-        await askGuidedSalePrice(chatId)
+        await askGuidedSalePrice(chatId, currentProductName)
       }
       return true
     }
@@ -2569,27 +2605,17 @@ const applyGuidedVariantSelection = async (
     data.unitPrice = null
     data.totalAmount = null
 
-    if (shouldBypassGuidedAddMore(meta)) {
-      return await advanceAfterItems(pendingId, chatId, data, meta)
-    }
-
-    meta.step = 'add_more'
-    meta.currentProductId = undefined
-    meta.currentProductName = undefined
-    meta.candidateVariants = undefined
-    meta.candidateProducts = undefined
-    clearGuidedVariantWizard(meta)
-    await updateGuidedSaleState(pendingId, data, meta)
-    await askGuidedSaleAddMore(chatId)
-    return true
+    return await advanceAfterItems(pendingId, chatId, data, meta, true)
   }
 
   if (data.unitPrice || data.totalAmount) {
     meta.step = 'price_apply_parsed'
     await updateGuidedSaleState(pendingId, data, meta)
+    const productLabel = meta.currentProductName?.trim() ? ` para *${meta.currentProductName.trim()}*` : ' para este producto'
     await TelegramClient.sendMessage({
       chatId,
-      text: 'Detecte un precio en tu mensaje. ¿Aplica para este producto?',
+      text: `Detecte un precio en tu mensaje. ¿Aplica${productLabel}?`,
+      parseMode: 'Markdown',
       replyMarkup: buildYesNoKeyboard(),
     })
     return true
@@ -2598,9 +2624,9 @@ const applyGuidedVariantSelection = async (
   meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode'
   await updateGuidedSaleState(pendingId, data, meta)
   if (isSimpleGuidedSale(meta)) {
-    await askGuidedSalePriceValue(chatId)
+    await askGuidedSalePriceValue(chatId, meta.currentProductName)
   } else {
-    await askGuidedSalePrice(chatId)
+    await askGuidedSalePrice(chatId, meta.currentProductName)
   }
   return true
 }
@@ -2620,9 +2646,9 @@ const continueAfterGuidedVariantPrices = async (pendingId: string, chatId: numbe
         clearGuidedVariantWizard(meta)
         await updateGuidedSaleState(pendingId, data, meta)
         if (isSimpleGuidedSale(meta)) {
-          await askGuidedSalePriceValue(chatId)
+          await askGuidedSalePriceValue(chatId, meta.currentProductName)
         } else {
-          await askGuidedSalePrice(chatId)
+          await askGuidedSalePrice(chatId, meta.currentProductName)
         }
         return true
       }
@@ -2667,20 +2693,7 @@ const continueAfterGuidedVariantPrices = async (pendingId: string, chatId: numbe
     return true
   }
 
-  if (meta.skipAddMore) {
-    clearGuidedVariantWizard(meta)
-    return await advanceAfterItems(pendingId, chatId, data, meta)
-  }
-
-  meta.step = 'add_more'
-  meta.currentProductId = undefined
-  meta.currentProductName = undefined
-  meta.candidateVariants = undefined
-  meta.candidateProducts = undefined
-  clearGuidedVariantWizard(meta)
-  await updateGuidedSaleState(pendingId, data, meta)
-  await askGuidedSaleAddMore(chatId)
-  return true
+  return await advanceAfterItems(pendingId, chatId, data, meta, true)
 }
 
 const buildCandidateVariantsFromItem = (item: GuidedSaleItem) =>
@@ -3498,6 +3511,38 @@ const sendProductListMessage = async (chatId: number, companyId: string) => {
   })
 }
 
+const PRODUCT_FETCH_PAGE_SIZE = 200
+const PRODUCT_FETCH_MAX_PAGES = 100
+
+type ListedProduct = Awaited<ReturnType<typeof inventoryGateway.listProducts>>['items'][number]
+
+const listAllActiveProducts = async (companyId: string): Promise<ListedProduct[]> => {
+  const collected: ListedProduct[] = []
+  let page = 1
+  let total = 0
+
+  while (page <= PRODUCT_FETCH_MAX_PAGES) {
+    const result = await inventoryGateway.listProducts({
+      companyId,
+      q: undefined,
+      active: true,
+      page,
+      pageSize: PRODUCT_FETCH_PAGE_SIZE,
+    })
+
+    total = result.total
+    if (result.items.length === 0) break
+
+    collected.push(...result.items)
+    if (collected.length >= total) break
+    if (result.items.length < PRODUCT_FETCH_PAGE_SIZE) break
+
+    page += 1
+  }
+
+  return collected
+}
+
 const resolveProductByName = async (companyId: string, name: string) => {
   const normalizeToken = (value: string) => {
     let token = normalizeText(value)
@@ -3526,20 +3571,7 @@ const resolveProductByName = async (companyId: string, name: string) => {
   if (items.length === 0) {
     const normalized = normalizeText(name)
     const inputTokens = buildTokens(name)
-    const allItems: Array<(typeof items)[number]> = []
-    const maxPages = 6
-    for (let page = 1; page <= maxPages; page += 1) {
-      const fallback = await inventoryGateway.listProducts({
-        companyId,
-        q: undefined,
-        active: true,
-        page,
-        pageSize: 200,
-      })
-      if (fallback.items.length === 0) break
-      allItems.push(...fallback.items)
-      if (fallback.items.length < 200) break
-    }
+    const allItems = await listAllActiveProducts(companyId)
 
     const filtered = allItems.filter((item) => {
       const nameNorm = normalizeText(item.name)
@@ -3915,12 +3947,12 @@ const startFastSaleFromText = async (chatId: number, companyId: string, rawText:
   }
 
   if (meta.step === 'price_mode') {
-    await askGuidedSalePrice(chatId)
+    await askGuidedSalePrice(chatId, meta.currentProductName)
     return true
   }
 
   if (meta.step === 'price_same') {
-    await askGuidedSalePriceValue(chatId)
+    await askGuidedSalePriceValue(chatId, meta.currentProductName)
     return true
   }
 
@@ -4025,9 +4057,9 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
       meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode'
       await updateGuidedSaleState(pending.id, data, meta)
       if (isSimpleGuidedSale(meta)) {
-        await askGuidedSalePriceValue(chatId)
+        await askGuidedSalePriceValue(chatId, meta.currentProductName)
       } else {
-        await askGuidedSalePrice(chatId)
+        await askGuidedSalePrice(chatId, meta.currentProductName)
       }
       return true
     }
@@ -4093,16 +4125,17 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
     })
 
     let candidates = items
+    let cachedAllActiveProducts: ListedProduct[] | null = null
+    const getAllActiveProducts = async () => {
+      if (cachedAllActiveProducts) return cachedAllActiveProducts
+      cachedAllActiveProducts = await listAllActiveProducts(pending.companyId)
+      return cachedAllActiveProducts
+    }
+
     if (candidates.length === 0) {
-      const fallback = await inventoryGateway.listProducts({
-        companyId: pending.companyId,
-        q: undefined,
-        active: true,
-        page: 1,
-        pageSize: 200,
-      })
+      const fallbackItems = await getAllActiveProducts()
       const normalized = normalizeText(text)
-      candidates = fallback.items.filter((item) => {
+      candidates = fallbackItems.filter((item) => {
         const nameNorm = normalizeText(item.name)
         const skuNorm = normalizeText(item.sku.toString())
         return nameNorm.includes(normalized) || skuNorm.includes(normalized)
@@ -4110,16 +4143,10 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
     }
 
     if (candidates.length === 0) {
-      const fallback = await inventoryGateway.listProducts({
-        companyId: pending.companyId,
-        q: undefined,
-        active: true,
-        page: 1,
-        pageSize: 50,
-      })
+      const fallbackItems = await getAllActiveProducts()
 
       const skuInput = normalizeText(text)
-      const skuMatch = fallback.items.find((item) => normalizeText(item.sku.toString()) === skuInput)
+      const skuMatch = fallbackItems.find((item) => normalizeText(item.sku.toString()) === skuInput)
       if (skuMatch) {
         meta.currentProductId = skuMatch.id.toString()
         meta.currentProductName = skuMatch.name
@@ -4148,19 +4175,15 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
         return true
       }
 
-      if (fallback.items.length === 0) {
+      if (fallbackItems.length === 0) {
         await TelegramClient.sendMessage({ chatId, text: 'No tienes productos activos.' })
         return true
       }
 
       meta.step = 'product_select'
-      meta.candidateProducts = fallback.items.map((product) => ({ id: product.id.toString(), name: product.name }))
+      meta.candidateProducts = fallbackItems.map((product) => ({ id: product.id.toString(), name: product.name }))
       await updateGuidedSaleState(pending.id, data, meta)
-      const list = meta.candidateProducts.map((product, index) => `${index + 1}) ${product.name}`).join('\n')
-      await TelegramClient.sendMessage({
-        chatId,
-        text: `No encontre ese producto. Elige de la lista:\n${list}\nResponde con el numero.`,
-      })
+      await sendGuidedSaleProductOptions(chatId, 'No encontre ese producto. Elige de la lista:', meta.candidateProducts)
       return true
     }
 
@@ -4196,8 +4219,7 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
     meta.step = 'product_select'
     meta.candidateProducts = candidates.map((product) => ({ id: product.id.toString(), name: product.name }))
     await updateGuidedSaleState(pending.id, data, meta)
-    const list = meta.candidateProducts.map((product, index) => `${index + 1}) ${product.name}`).join('\n')
-    await TelegramClient.sendMessage({ chatId, text: `Encontre varios productos:\n${list}\nResponde con el numero.` })
+    await sendGuidedSaleProductOptions(chatId, 'Encontre varios productos:', meta.candidateProducts)
     return true
   }
 
@@ -4382,9 +4404,9 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
         data.totalAmount = null
         await updateGuidedSaleState(pending.id, data, meta)
         if (isSimpleGuidedSale(meta)) {
-          await askGuidedSalePriceValue(chatId)
+          await askGuidedSalePriceValue(chatId, meta.currentProductName)
         } else {
-          await askGuidedSalePrice(chatId)
+          await askGuidedSalePrice(chatId, meta.currentProductName)
         }
         return true
       }
@@ -4399,19 +4421,7 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
 
       data.unitPrice = null
       data.totalAmount = null
-      if (shouldBypassGuidedAddMore(meta)) {
-        return await advanceAfterItems(pending.id, chatId, data, meta)
-      }
-
-      meta.step = 'add_more'
-      meta.currentProductId = undefined
-      meta.currentProductName = undefined
-      meta.candidateVariants = undefined
-      meta.candidateProducts = undefined
-      clearGuidedVariantWizard(meta)
-      await updateGuidedSaleState(pending.id, data, meta)
-      await askGuidedSaleAddMore(chatId)
-      return true
+      return await advanceAfterItems(pending.id, chatId, data, meta, true)
     }
 
     meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode'
@@ -4419,9 +4429,9 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
     data.totalAmount = null
     await updateGuidedSaleState(pending.id, data, meta)
     if (isSimpleGuidedSale(meta)) {
-      await askGuidedSalePriceValue(chatId)
+      await askGuidedSalePriceValue(chatId, meta.currentProductName)
     } else {
-      await askGuidedSalePrice(chatId)
+      await askGuidedSalePrice(chatId, meta.currentProductName)
     }
     return true
   }
@@ -4430,7 +4440,7 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
     if (isSimpleGuidedSale(meta)) {
       meta.step = 'price_same'
       await updateGuidedSaleState(pending.id, data, meta)
-      await askGuidedSalePriceValue(chatId)
+      await askGuidedSalePriceValue(chatId, meta.currentProductName)
       return true
     }
 
@@ -4458,7 +4468,7 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
     if (answer) {
       meta.step = 'price_same'
       await updateGuidedSaleState(pending.id, data, meta)
-      await askGuidedSalePriceValue(chatId)
+      await askGuidedSalePriceValue(chatId, meta.currentProductName)
       return true
     }
 
@@ -4514,27 +4524,14 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
       meta.pendingPriceScope = null
       data.unitPrice = null
       data.totalAmount = null
-
-      if (shouldBypassGuidedAddMore(meta)) {
-        return await advanceAfterItems(pending.id, chatId, data, meta)
-      }
-
-      meta.step = 'add_more'
-      meta.currentProductId = undefined
-      meta.currentProductName = undefined
-      meta.candidateVariants = undefined
-      meta.candidateProducts = undefined
-      clearGuidedVariantWizard(meta)
-      await updateGuidedSaleState(pending.id, data, meta)
-      await askGuidedSaleAddMore(chatId)
-      return true
+      return await advanceAfterItems(pending.id, chatId, data, meta, true)
     }
 
     meta.pendingPriceAmount = amount
     meta.pendingPriceScope = null
     meta.step = 'price_same_type'
     await updateGuidedSaleState(pending.id, data, meta)
-    await askGuidedSalePriceType(chatId)
+    await askGuidedSalePriceType(chatId, meta.currentProductName)
     return true
   }
 
@@ -4543,7 +4540,7 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
     if (amount <= 0) {
       meta.step = 'price_same'
       await updateGuidedSaleState(pending.id, data, meta)
-      await askGuidedSalePriceValue(chatId)
+      await askGuidedSalePriceValue(chatId, meta.currentProductName)
       return true
     }
 
@@ -4554,7 +4551,8 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
     }
 
     if (!scope) {
-      await TelegramClient.sendMessage({ chatId, text: 'Responde "unitario" o "total".' })
+      const productHint = meta.currentProductName?.trim() ? ` para ${meta.currentProductName.trim()}` : ''
+      await TelegramClient.sendMessage({ chatId, text: `Responde "unitario" o "total"${productHint}.` })
       return true
     }
 
@@ -4586,9 +4584,9 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
           meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode'
           await updateGuidedSaleState(pending.id, data, meta)
           if (isSimpleGuidedSale(meta)) {
-            await askGuidedSalePriceValue(chatId)
+            await askGuidedSalePriceValue(chatId, meta.currentProductName)
           } else {
-            await askGuidedSalePrice(chatId)
+            await askGuidedSalePrice(chatId, meta.currentProductName)
           }
           return true
         }
@@ -4633,19 +4631,7 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
       return true
     }
 
-    if (meta.skipAddMore) {
-      return await advanceAfterItems(pending.id, chatId, data, meta)
-    }
-
-    meta.step = 'add_more'
-    meta.currentProductId = undefined
-    meta.currentProductName = undefined
-    meta.candidateVariants = undefined
-    meta.candidateProducts = undefined
-    clearGuidedVariantWizard(meta)
-    await updateGuidedSaleState(pending.id, data, meta)
-    await askGuidedSaleAddMore(chatId)
-    return true
+    return await advanceAfterItems(pending.id, chatId, data, meta, true)
   }
 
   if (meta.step === 'price_variants') {
@@ -4881,9 +4867,9 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
     meta.step = isSimpleGuidedSale(meta) ? 'price_same' : 'price_mode'
     await updateGuidedSaleState(pending.id, data, meta)
     if (isSimpleGuidedSale(meta)) {
-      await askGuidedSalePriceValue(chatId)
+      await askGuidedSalePriceValue(chatId, meta.currentProductName)
     } else {
-      await askGuidedSalePrice(chatId)
+      await askGuidedSalePrice(chatId, meta.currentProductName)
     }
     return true
   }
