@@ -3670,9 +3670,18 @@ const parseCompactSaleItems = (message: string): ParsedSaleItems | null => {
 
   if (chunks.length === 0) return null
 
+  const isAllowedTail = (tail: string) =>
+    /^(por\b|total\b|en total\b|con\b|sin\b|efectivo\b|transferencia\b|banco\b|tarjeta\b|credito\b|cr[eé]dito\b|hoy\b|ayer\b|\d{4}-\d{2}-\d{2}\b)/i.test(
+      tail.trim(),
+    )
+
   const items: ParsedSaleItems['items'] = []
   for (const chunk of chunks) {
-    const match = chunk.match(/^(\d+)\s+([A-Za-z0-9][A-Za-z0-9\-_.\/]{1,})$/)
+    if (items.length > 0 && isAllowedTail(chunk)) {
+      continue
+    }
+
+    const match = chunk.match(/^(\d+)\s+([A-Za-z0-9][A-Za-z0-9\-_.\/]{1,})(.*)$/)
     if (!match) return null
 
     const qty = Number(match[1])
@@ -3680,6 +3689,9 @@ const parseCompactSaleItems = (message: string): ParsedSaleItems | null => {
 
     const productCode = match[2].trim()
     if (!productCode) return null
+
+    const tail = (match[3] ?? '').trim()
+    if (tail && !isAllowedTail(tail)) return null
 
     items.push({
       productName: productCode,
@@ -3697,10 +3709,17 @@ const parseCompactSaleItems = (message: string): ParsedSaleItems | null => {
 
   if (items.length === 0) return null
 
+  let paymentMethod: string | null = null
+  if (/\b(credito|cr[eé]dito)\b/i.test(raw)) paymentMethod = 'credito'
+  else if (/\b(transferencia|banco|tarjeta)\b/i.test(raw)) paymentMethod = 'transferencia'
+  else if (/\befectivo\b/i.test(raw)) paymentMethod = 'efectivo'
+
+  const date = parseDateInput(raw)
+
   return {
     customerName,
-    paymentMethod: null,
-    date: null,
+    paymentMethod,
+    date,
     creditDueDate: null,
     items,
   }
@@ -4216,6 +4235,14 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
       )
       if (exactCandidate) {
         candidates = [exactCandidate]
+      } else {
+        const allItems = await getAllActiveProducts()
+        const exactGlobal = allItems.find(
+          (item) => normalizeText(item.sku.toString()) === normalizedInput || normalizeText(item.name) === normalizedInput,
+        )
+        if (exactGlobal) {
+          candidates = [exactGlobal]
+        }
       }
     }
 
