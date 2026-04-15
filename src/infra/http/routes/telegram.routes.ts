@@ -16,7 +16,7 @@ import type { SaleEventInput } from '@application/eventos/sales/data/SaleEventIn
 import { makeRegisterSale } from '@application/eventos/sales/use-cases/registerSale'
 
 import { makeRegisterSupplierPayment } from '@application/eventos/supplier-payments/use-cases/registerSupplierPayment'
-import { aiParseSaleItems } from '@application/parsers/aiSaleItemsParser'
+import { aiParseSaleItems, type ParsedSaleItems } from '@application/parsers/aiSaleItemsParser'
 import type { PendingEvent, PendingEventStatus, PendingEventType } from '@application/pending-events/PendingEvent'
 import { makeGenerateIncomeStatement } from '@application/reports/use-cases/generateIncomeStatement'
 import { AccountingPeriodStatus } from '@domain/accounting-periods/AccountingPeriodStatus'
@@ -3568,8 +3568,18 @@ const resolveProductByName = async (companyId: string, name: string) => {
     pageSize: 10,
   })
 
+  const normalized = normalizeText(name)
+  const exact = items.find((item) => normalizeText(item.name) === normalized || normalizeText(item.sku.toString()) === normalized)
+  if (exact) return exact
+
+  const looksLikeSku = /^[a-z0-9][a-z0-9\-_.\/]{1,}$/i.test(name.trim())
+  if (looksLikeSku && items.length > 1) {
+    const allItems = await listAllActiveProducts(companyId)
+    const skuExact = allItems.find((item) => normalizeText(item.sku.toString()) === normalized)
+    if (skuExact) return skuExact
+  }
+
   if (items.length === 0) {
-    const normalized = normalizeText(name)
     const inputTokens = buildTokens(name)
     const allItems = await listAllActiveProducts(companyId)
 
@@ -3600,10 +3610,6 @@ const resolveProductByName = async (companyId: string, name: string) => {
     const exact = filtered.find((item) => normalizeText(item.name) === normalized || normalizeText(item.sku.toString()) === normalized)
     return exact ?? null
   }
-
-  const normalized = normalizeText(name)
-  const exact = items.find((item) => normalizeText(item.name) === normalized)
-  if (exact) return exact
 
   if (items.length === 1) return items[0]
 
@@ -3639,6 +3645,67 @@ const resolveVariantByValue = async (companyId: string, productId: string, attri
   return activeVariants.find((variant) => normalizeText(variant.value) === normalizedValue) ?? null
 }
 
+const parseCompactSaleItems = (message: string): ParsedSaleItems | null => {
+  const raw = message.trim()
+  if (!raw) return null
+
+  const normalizedRaw = normalizeText(raw)
+  if (!/\b(venta|vendi|vendio)\b/.test(normalizedRaw)) return null
+
+  let working = raw.replace(/^\s*(venta|vendi|vendio)\s*(de)?\s*/i, '').trim()
+  if (!working) return null
+
+  let customerName: string | null = null
+  const customerMatch = working.match(/\b(?:esto\s+fue\s+a|fue\s+a|para|a)\s+([A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .'-]{1,})\s*$/i)
+  if (customerMatch && typeof customerMatch.index === 'number') {
+    customerName = customerMatch[1].trim()
+    working = working.slice(0, customerMatch.index).replace(/[,\s]+$/, '').trim()
+  }
+
+  const separated = working.replace(/\s+y\s+/gi, ',')
+  const chunks = separated
+    .split(/[,;\n]+/)
+    .map((chunk) => chunk.trim())
+    .filter(Boolean)
+
+  if (chunks.length === 0) return null
+
+  const items: ParsedSaleItems['items'] = []
+  for (const chunk of chunks) {
+    const match = chunk.match(/^(\d+)\s+([A-Za-z0-9][A-Za-z0-9\-_.\/]{1,})$/)
+    if (!match) return null
+
+    const qty = Number(match[1])
+    if (!Number.isFinite(qty) || qty <= 0) return null
+
+    const productCode = match[2].trim()
+    if (!productCode) return null
+
+    items.push({
+      productName: productCode,
+      variants: [
+        {
+          attribute: null,
+          value: '__unspecified__',
+          qty: Math.round(qty),
+          unitPrice: null,
+          totalPrice: null,
+        },
+      ],
+    })
+  }
+
+  if (items.length === 0) return null
+
+  return {
+    customerName,
+    paymentMethod: null,
+    date: null,
+    creditDueDate: null,
+    items,
+  }
+}
+
 const startFastSaleFromText = async (chatId: number, companyId: string, rawText: string, options?: { silentFail?: boolean; allowGuidedFallback?: boolean }): Promise<boolean> => {
   const existing = await pendingEventRepository.findLatestPendingByTelegramUserId(chatId, 'sale_guided')
   if (existing && existing.status === 'PENDING_CONFIRMATION') {
@@ -3646,7 +3713,7 @@ const startFastSaleFromText = async (chatId: number, companyId: string, rawText:
   }
   const inventoryMode = await inventoryGateway.getInventoryMode(companyId)
   const cleanedText = rawText.replace(/venta\s+rápida|venta\s+rapida|registrar\s+venta\s+rápida|registrar\s+venta\s+rapida/gi, '').trim()
-  const parsed = await aiParseSaleItems(cleanedText || rawText)
+  const parsed = parseCompactSaleItems(cleanedText || rawText) ?? (await aiParseSaleItems(cleanedText || rawText))
   if (!parsed || parsed.items.length === 0) {
     if (!options?.silentFail) {
       await TelegramClient.sendMessage({
@@ -4140,6 +4207,16 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
         const skuNorm = normalizeText(item.sku.toString())
         return nameNorm.includes(normalized) || skuNorm.includes(normalized)
       })
+    }
+
+    if (candidates.length > 1) {
+      const normalizedInput = normalizeText(text)
+      const exactCandidate = candidates.find(
+        (item) => normalizeText(item.sku.toString()) === normalizedInput || normalizeText(item.name) === normalizedInput,
+      )
+      if (exactCandidate) {
+        candidates = [exactCandidate]
+      }
     }
 
     if (candidates.length === 0) {

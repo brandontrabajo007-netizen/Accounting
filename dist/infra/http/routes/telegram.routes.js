@@ -2934,8 +2934,18 @@ const resolveProductByName = async (companyId, name) => {
         page: 1,
         pageSize: 10,
     });
+    const normalized = normalizeText(name);
+    const exact = items.find((item) => normalizeText(item.name) === normalized || normalizeText(item.sku.toString()) === normalized);
+    if (exact)
+        return exact;
+    const looksLikeSku = /^[a-z0-9][a-z0-9\-_.\/]{1,}$/i.test(name.trim());
+    if (looksLikeSku && items.length > 1) {
+        const allItems = await listAllActiveProducts(companyId);
+        const skuExact = allItems.find((item) => normalizeText(item.sku.toString()) === normalized);
+        if (skuExact)
+            return skuExact;
+    }
     if (items.length === 0) {
-        const normalized = normalizeText(name);
         const inputTokens = buildTokens(name);
         const allItems = await listAllActiveProducts(companyId);
         const filtered = allItems.filter((item) => {
@@ -2966,10 +2976,6 @@ const resolveProductByName = async (companyId, name) => {
         const exact = filtered.find((item) => normalizeText(item.name) === normalized || normalizeText(item.sku.toString()) === normalized);
         return exact ?? null;
     }
-    const normalized = normalizeText(name);
-    const exact = items.find((item) => normalizeText(item.name) === normalized);
-    if (exact)
-        return exact;
     if (items.length === 1)
         return items[0];
     const inputTokens = buildTokens(name);
@@ -3001,6 +3007,63 @@ const resolveVariantByValue = async (companyId, productId, attribute, value) => 
     }
     return activeVariants.find((variant) => normalizeText(variant.value) === normalizedValue) ?? null;
 };
+const parseCompactSaleItems = (message) => {
+    const raw = message.trim();
+    if (!raw)
+        return null;
+    const normalizedRaw = normalizeText(raw);
+    if (!/\b(venta|vendi|vendio)\b/.test(normalizedRaw))
+        return null;
+    let working = raw.replace(/^\s*(venta|vendi|vendio)\s*(de)?\s*/i, '').trim();
+    if (!working)
+        return null;
+    let customerName = null;
+    const customerMatch = working.match(/\b(?:esto\s+fue\s+a|fue\s+a|para|a)\s+([A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .'-]{1,})\s*$/i);
+    if (customerMatch && typeof customerMatch.index === 'number') {
+        customerName = customerMatch[1].trim();
+        working = working.slice(0, customerMatch.index).replace(/[,\s]+$/, '').trim();
+    }
+    const separated = working.replace(/\s+y\s+/gi, ',');
+    const chunks = separated
+        .split(/[,;\n]+/)
+        .map((chunk) => chunk.trim())
+        .filter(Boolean);
+    if (chunks.length === 0)
+        return null;
+    const items = [];
+    for (const chunk of chunks) {
+        const match = chunk.match(/^(\d+)\s+([A-Za-z0-9][A-Za-z0-9\-_.\/]{1,})$/);
+        if (!match)
+            return null;
+        const qty = Number(match[1]);
+        if (!Number.isFinite(qty) || qty <= 0)
+            return null;
+        const productCode = match[2].trim();
+        if (!productCode)
+            return null;
+        items.push({
+            productName: productCode,
+            variants: [
+                {
+                    attribute: null,
+                    value: '__unspecified__',
+                    qty: Math.round(qty),
+                    unitPrice: null,
+                    totalPrice: null,
+                },
+            ],
+        });
+    }
+    if (items.length === 0)
+        return null;
+    return {
+        customerName,
+        paymentMethod: null,
+        date: null,
+        creditDueDate: null,
+        items,
+    };
+};
 const startFastSaleFromText = async (chatId, companyId, rawText, options) => {
     const existing = await dependencies_1.pendingEventRepository.findLatestPendingByTelegramUserId(chatId, 'sale_guided');
     if (existing && existing.status === 'PENDING_CONFIRMATION') {
@@ -3008,7 +3071,7 @@ const startFastSaleFromText = async (chatId, companyId, rawText, options) => {
     }
     const inventoryMode = await dependencies_1.inventoryGateway.getInventoryMode(companyId);
     const cleanedText = rawText.replace(/venta\s+rápida|venta\s+rapida|registrar\s+venta\s+rápida|registrar\s+venta\s+rapida/gi, '').trim();
-    const parsed = await (0, aiSaleItemsParser_1.aiParseSaleItems)(cleanedText || rawText);
+    const parsed = parseCompactSaleItems(cleanedText || rawText) ?? (await (0, aiSaleItemsParser_1.aiParseSaleItems)(cleanedText || rawText));
     if (!parsed || parsed.items.length === 0) {
         if (!options?.silentFail) {
             await telegramClient_1.TelegramClient.sendMessage({
@@ -3463,6 +3526,13 @@ const handleGuidedSaleMessage = async (pending, chatId, rawText) => {
                 const skuNorm = normalizeText(item.sku.toString());
                 return nameNorm.includes(normalized) || skuNorm.includes(normalized);
             });
+        }
+        if (candidates.length > 1) {
+            const normalizedInput = normalizeText(text);
+            const exactCandidate = candidates.find((item) => normalizeText(item.sku.toString()) === normalizedInput || normalizeText(item.name) === normalizedInput);
+            if (exactCandidate) {
+                candidates = [exactCandidate];
+            }
         }
         if (candidates.length === 0) {
             const fallbackItems = await getAllActiveProducts();
