@@ -81,6 +81,22 @@ export class MongoProductRepo implements ProductRepo {
     )
   }
 
+  async deactivate(companyId: string, id: ProductId): Promise<void> {
+    await ProductModel.updateOne(
+      { _id: id, companyId },
+      {
+        $set: {
+          active: false,
+          updatedAt: new Date(),
+        },
+      },
+    )
+  }
+
+  async delete(companyId: string, id: ProductId): Promise<void> {
+    await ProductModel.deleteOne({ _id: id, companyId })
+  }
+
   async list(query: ProductListQuery): Promise<ProductListResult> {
     const filters: Record<string, unknown> = { companyId: query.companyId }
     if (query.q) {

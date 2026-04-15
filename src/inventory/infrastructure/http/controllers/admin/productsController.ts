@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express'
-import { productRepo, createProduct, updateProduct } from '../../dependencies'
+import { productRepo, createProduct, updateProduct, deactivateProduct, deleteProduct } from '../../dependencies'
 import { createProductSchema, listProductsQuerySchema, updateProductSchema } from '../../validation/adminSchemas'
 import { serializeAdminProduct } from '../../serializers/productSerializers'
 import { ProductId } from '../../../../domain/value-objects/ProductId'
@@ -56,4 +56,37 @@ export async function updateProductHandler(req: Request, res: Response) {
   }
 
   return res.json({ ok: true, item: serializeAdminProduct(result.value.product) })
+}
+
+export async function deleteProductHandler(req: Request, res: Response) {
+  const companyId = req.user!.companyId
+  const { productId } = req.params
+  const result = await deactivateProduct({ companyId, productId })
+
+  if (!result.ok) {
+    if (result.error.type === 'ProductNotFound') {
+      return res.status(404).json({ ok: false, error: result.error })
+    }
+    return res.status(400).json({ ok: false, error: result.error })
+  }
+
+  return res.json({ ok: true })
+}
+
+export async function deleteProductHardHandler(req: Request, res: Response) {
+  const companyId = req.user!.companyId
+  const { productId } = req.params
+  const result = await deleteProduct({ companyId, productId })
+
+  if (!result.ok) {
+    if (result.error.type === 'ProductNotFound') {
+      return res.status(404).json({ ok: false, error: result.error })
+    }
+    if (result.error.type === 'ProductHasActiveReservations') {
+      return res.status(409).json({ ok: false, error: result.error })
+    }
+    return res.status(400).json({ ok: false, error: result.error })
+  }
+
+  return res.json({ ok: true })
 }

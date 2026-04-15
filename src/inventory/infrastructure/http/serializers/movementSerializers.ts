@@ -6,11 +6,20 @@ type MovementProductInfo = {
 }
 
 export function serializeMovement(movement: InventoryMovement, productInfo?: MovementProductInfo) {
+  const liveName = productInfo?.name?.trim()
+  const snapshotName = movement.productNameSnapshot?.trim()
+  const productName = liveName
+    ? liveName
+    : snapshotName
+      ? `Producto borrado (era: ${snapshotName})`
+      : undefined
+  const productSku = productInfo?.sku?.trim() || movement.productSkuSnapshot?.trim() || undefined
+
   return {
     movementId: movement.id,
     productId: movement.productId,
-    productName: productInfo?.name,
-    productSku: productInfo?.sku,
+    productName,
+    productSku,
     variantId: movement.variantId,
     type: movement.type,
     qty: movement.type === 'ADJUST' ? movement.qtyDelta : movement.qty,

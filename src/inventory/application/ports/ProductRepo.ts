@@ -20,5 +20,7 @@ export interface ProductRepo {
   getBySku(companyId: string, sku: Sku): Promise<Product | null>
   create(product: Product): Promise<void>
   update(product: Product): Promise<void>
+  deactivate(companyId: string, id: ProductId): Promise<void>
+  delete(companyId: string, id: ProductId): Promise<void>
   list(query: ProductListQuery): Promise<ProductListResult>
 }

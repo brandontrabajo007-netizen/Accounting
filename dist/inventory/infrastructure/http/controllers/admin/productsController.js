@@ -4,6 +4,8 @@ exports.createProductHandler = createProductHandler;
 exports.listProductsHandler = listProductsHandler;
 exports.getProductHandler = getProductHandler;
 exports.updateProductHandler = updateProductHandler;
+exports.deleteProductHandler = deleteProductHandler;
+exports.deleteProductHardHandler = deleteProductHardHandler;
 const dependencies_1 = require("../../dependencies");
 const adminSchemas_1 = require("../../validation/adminSchemas");
 const productSerializers_1 = require("../../serializers/productSerializers");
@@ -52,4 +54,31 @@ async function updateProductHandler(req, res) {
         return res.status(400).json({ ok: false, error: result.error });
     }
     return res.json({ ok: true, item: (0, productSerializers_1.serializeAdminProduct)(result.value.product) });
+}
+async function deleteProductHandler(req, res) {
+    const companyId = req.user.companyId;
+    const { productId } = req.params;
+    const result = await (0, dependencies_1.deactivateProduct)({ companyId, productId });
+    if (!result.ok) {
+        if (result.error.type === 'ProductNotFound') {
+            return res.status(404).json({ ok: false, error: result.error });
+        }
+        return res.status(400).json({ ok: false, error: result.error });
+    }
+    return res.json({ ok: true });
+}
+async function deleteProductHardHandler(req, res) {
+    const companyId = req.user.companyId;
+    const { productId } = req.params;
+    const result = await (0, dependencies_1.deleteProduct)({ companyId, productId });
+    if (!result.ok) {
+        if (result.error.type === 'ProductNotFound') {
+            return res.status(404).json({ ok: false, error: result.error });
+        }
+        if (result.error.type === 'ProductHasActiveReservations') {
+            return res.status(409).json({ ok: false, error: result.error });
+        }
+        return res.status(400).json({ ok: false, error: result.error });
+    }
+    return res.json({ ok: true });
 }

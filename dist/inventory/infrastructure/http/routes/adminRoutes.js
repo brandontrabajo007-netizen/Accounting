@@ -22,6 +22,8 @@ router.post('/products', productsController_1.createProductHandler);
 router.get('/products', productsController_1.listProductsHandler);
 router.get('/products/:productId', productsController_1.getProductHandler);
 router.patch('/products/:productId', productsController_1.updateProductHandler);
+router.delete('/products/:productId', productsController_1.deleteProductHandler);
+router.delete('/products/:productId/hard', productsController_1.deleteProductHardHandler);
 router.post('/products/:productId/variants', variantsController_1.createVariantHandler);
 router.get('/products/:productId/variants', variantsController_1.listVariantsHandler);
 router.patch('/variants/:variantId', variantsController_1.updateVariantHandler);

@@ -6,6 +6,8 @@ import { MongoReservationRepo } from '../repositories/MongoReservationRepo'
 import { MongoInventorySettingsRepo } from '../repositories/MongoInventorySettingsRepo'
 import { makeCreateProduct } from '../../application/use-cases/createProduct'
 import { makeUpdateProduct } from '../../application/use-cases/updateProduct'
+import { makeDeactivateProduct } from '../../application/use-cases/deactivateProduct'
+import { makeDeleteProduct } from '../../application/use-cases/deleteProduct'
 import { makeCreateVariant } from '../../application/use-cases/createVariant'
 import { makeUpdateVariant } from '../../application/use-cases/updateVariant'
 import { makeDeactivateVariant } from '../../application/use-cases/deactivateVariant'
@@ -29,6 +31,8 @@ export const idGenerator = () => new mongoose.Types.ObjectId().toHexString()
 
 export const createProduct = makeCreateProduct({ productRepo, idGenerator })
 export const updateProduct = makeUpdateProduct({ productRepo })
+export const deactivateProduct = makeDeactivateProduct({ productRepo })
+export const deleteProduct = makeDeleteProduct({ productRepo, variantRepo, movementRepo, reservationRepo })
 export const createVariant = makeCreateVariant({ variantRepo, productRepo, inventorySettingsRepo, idGenerator })
 export const updateVariant = makeUpdateVariant({ variantRepo, inventorySettingsRepo })
 export const deactivateVariant = makeDeactivateVariant({ variantRepo, inventorySettingsRepo })

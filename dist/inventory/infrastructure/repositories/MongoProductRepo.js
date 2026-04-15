@@ -62,6 +62,17 @@ class MongoProductRepo {
             },
         });
     }
+    async deactivate(companyId, id) {
+        await ProductModel_1.ProductModel.updateOne({ _id: id, companyId }, {
+            $set: {
+                active: false,
+                updatedAt: new Date(),
+            },
+        });
+    }
+    async delete(companyId, id) {
+        await ProductModel_1.ProductModel.deleteOne({ _id: id, companyId });
+    }
     async list(query) {
         const filters = { companyId: query.companyId };
         if (query.q) {

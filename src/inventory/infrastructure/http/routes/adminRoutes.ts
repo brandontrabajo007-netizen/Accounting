@@ -1,5 +1,12 @@
 import express from 'express'
-import { createProductHandler, getProductHandler, listProductsHandler, updateProductHandler } from '../controllers/admin/productsController'
+import {
+  createProductHandler,
+  deleteProductHandler,
+  deleteProductHardHandler,
+  getProductHandler,
+  listProductsHandler,
+  updateProductHandler,
+} from '../controllers/admin/productsController'
 import {
   createVariantHandler,
   deleteVariantHandler,
@@ -30,6 +37,8 @@ router.post('/products', createProductHandler)
 router.get('/products', listProductsHandler)
 router.get('/products/:productId', getProductHandler)
 router.patch('/products/:productId', updateProductHandler)
+router.delete('/products/:productId', deleteProductHandler)
+router.delete('/products/:productId/hard', deleteProductHardHandler)
 
 router.post('/products/:productId/variants', createVariantHandler)
 router.get('/products/:productId/variants', listVariantsHandler)

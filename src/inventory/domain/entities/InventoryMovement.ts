@@ -14,6 +14,9 @@ export type InventoryMovementBase = Readonly<{
   id: string
   companyId: string
   productId: ProductId
+  productNameSnapshot?: string
+  productSkuSnapshot?: string
+  productDeleted?: boolean
   variantId: VariantId
   type: MovementType
   occurredAt: Date

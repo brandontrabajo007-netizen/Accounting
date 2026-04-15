@@ -9,6 +9,9 @@ function toDomain(doc: {
   _id: string
   companyId: string
   productId: string
+  productNameSnapshot?: string
+  productSkuSnapshot?: string
+  productDeleted?: boolean
   variantId: string
   type: 'IN' | 'OUT' | 'ADJUST'
   qty?: number
@@ -24,6 +27,9 @@ function toDomain(doc: {
       id: doc._id,
       companyId: doc.companyId,
       productId: ProductId.from(doc.productId),
+      productNameSnapshot: doc.productNameSnapshot,
+      productSkuSnapshot: doc.productSkuSnapshot,
+      productDeleted: doc.productDeleted,
       variantId: VariantId.from(doc.variantId),
       type: 'ADJUST',
       qtyDelta: doc.qtyDelta ?? 0,
@@ -39,6 +45,9 @@ function toDomain(doc: {
     id: doc._id,
     companyId: doc.companyId,
     productId: ProductId.from(doc.productId),
+    productNameSnapshot: doc.productNameSnapshot,
+    productSkuSnapshot: doc.productSkuSnapshot,
+    productDeleted: doc.productDeleted,
     variantId: VariantId.from(doc.variantId),
     type: doc.type,
     qty: Quantity.from(doc.qty ?? 0),
@@ -58,6 +67,9 @@ export class MongoMovementRepo implements MovementRepo {
           _id: m.id,
           companyId: m.companyId,
           productId: m.productId,
+          productNameSnapshot: m.productNameSnapshot,
+          productSkuSnapshot: m.productSkuSnapshot,
+          productDeleted: m.productDeleted,
           variantId: m.variantId,
           type: m.type,
           qtyDelta: m.qtyDelta,
@@ -72,6 +84,9 @@ export class MongoMovementRepo implements MovementRepo {
         _id: m.id,
         companyId: m.companyId,
         productId: m.productId,
+        productNameSnapshot: m.productNameSnapshot,
+        productSkuSnapshot: m.productSkuSnapshot,
+        productDeleted: m.productDeleted,
         variantId: m.variantId,
         type: m.type,
         qty: m.qty,
@@ -153,9 +168,31 @@ export class MongoMovementRepo implements MovementRepo {
     return docs.map(toDomain)
   }
 
+  async existsByProduct(companyId: string, productId: ProductId): Promise<boolean> {
+    const doc = await MovementModel.findOne({ companyId, productId }).select({ _id: 1 }).lean().exec()
+    return !!doc
+  }
+
   async existsByVariant(companyId: string, variantId: VariantId): Promise<boolean> {
     const doc = await MovementModel.findOne({ companyId, variantId }).select({ _id: 1 }).lean().exec()
     return !!doc
+  }
+
+  async stampDeletedProductSnapshot(
+    companyId: string,
+    productId: ProductId,
+    snapshot: Readonly<{ name: string; sku: string }>,
+  ): Promise<void> {
+    await MovementModel.updateMany(
+      { companyId, productId },
+      {
+        $set: {
+          productNameSnapshot: snapshot.name,
+          productSkuSnapshot: snapshot.sku,
+          productDeleted: true,
+        },
+      },
+    )
   }
 
   async existsByCompany(companyId: string): Promise<boolean> {

@@ -33,6 +33,12 @@ export interface MovementRepo {
   ): Promise<ReadonlyArray<InventoryMovement>>
   listByProduct(companyId: string, productId: ProductId): Promise<ReadonlyArray<InventoryMovement>>
   listByVariant(companyId: string, variantId: VariantId): Promise<ReadonlyArray<InventoryMovement>>
+  existsByProduct(companyId: string, productId: ProductId): Promise<boolean>
   existsByVariant(companyId: string, variantId: VariantId): Promise<boolean>
+  stampDeletedProductSnapshot(
+    companyId: string,
+    productId: ProductId,
+    snapshot: Readonly<{ name: string; sku: string }>,
+  ): Promise<void>
   existsByCompany(companyId: string): Promise<boolean>
 }

@@ -11,6 +11,9 @@ function toDomain(doc) {
             id: doc._id,
             companyId: doc.companyId,
             productId: ProductId_1.ProductId.from(doc.productId),
+            productNameSnapshot: doc.productNameSnapshot,
+            productSkuSnapshot: doc.productSkuSnapshot,
+            productDeleted: doc.productDeleted,
             variantId: VariantId_1.VariantId.from(doc.variantId),
             type: 'ADJUST',
             qtyDelta: doc.qtyDelta ?? 0,
@@ -25,6 +28,9 @@ function toDomain(doc) {
         id: doc._id,
         companyId: doc.companyId,
         productId: ProductId_1.ProductId.from(doc.productId),
+        productNameSnapshot: doc.productNameSnapshot,
+        productSkuSnapshot: doc.productSkuSnapshot,
+        productDeleted: doc.productDeleted,
         variantId: VariantId_1.VariantId.from(doc.variantId),
         type: doc.type,
         qty: Quantity_1.Quantity.from(doc.qty ?? 0),
@@ -43,6 +49,9 @@ class MongoMovementRepo {
                     _id: m.id,
                     companyId: m.companyId,
                     productId: m.productId,
+                    productNameSnapshot: m.productNameSnapshot,
+                    productSkuSnapshot: m.productSkuSnapshot,
+                    productDeleted: m.productDeleted,
                     variantId: m.variantId,
                     type: m.type,
                     qtyDelta: m.qtyDelta,
@@ -57,6 +66,9 @@ class MongoMovementRepo {
                 _id: m.id,
                 companyId: m.companyId,
                 productId: m.productId,
+                productNameSnapshot: m.productNameSnapshot,
+                productSkuSnapshot: m.productSkuSnapshot,
+                productDeleted: m.productDeleted,
                 variantId: m.variantId,
                 type: m.type,
                 qty: m.qty,
@@ -121,9 +133,22 @@ class MongoMovementRepo {
         const docs = await MovementModel_1.MovementModel.find({ companyId, variantId }).lean().exec();
         return docs.map(toDomain);
     }
+    async existsByProduct(companyId, productId) {
+        const doc = await MovementModel_1.MovementModel.findOne({ companyId, productId }).select({ _id: 1 }).lean().exec();
+        return !!doc;
+    }
     async existsByVariant(companyId, variantId) {
         const doc = await MovementModel_1.MovementModel.findOne({ companyId, variantId }).select({ _id: 1 }).lean().exec();
         return !!doc;
+    }
+    async stampDeletedProductSnapshot(companyId, productId, snapshot) {
+        await MovementModel_1.MovementModel.updateMany({ companyId, productId }, {
+            $set: {
+                productNameSnapshot: snapshot.name,
+                productSkuSnapshot: snapshot.sku,
+                productDeleted: true,
+            },
+        });
     }
     async existsByCompany(companyId) {
         const doc = await MovementModel_1.MovementModel.findOne({ companyId }).select({ _id: 1 }).lean().exec();
