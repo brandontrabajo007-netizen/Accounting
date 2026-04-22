@@ -11,7 +11,7 @@ if (!apiKey) {
     throw new Error('❌ Falta la variable de entorno GEMINI_API_KEY');
 }
 const genAI = new generative_ai_1.GoogleGenerativeAI(apiKey);
-const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 // Convierte un audio de Telegram en texto
 async function transcribeTelegramAudio(fileUrl) {
     try {

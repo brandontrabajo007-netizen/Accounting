@@ -16,7 +16,7 @@ if (!GEMINI_API_KEY)
     throw new Error('❌ Falta GEMINI_API_KEY en .env');
 const genAI = new generative_ai_1.GoogleGenerativeAI(GEMINI_API_KEY);
 const transcriberModel = genAI.getGenerativeModel({
-    model: 'gemini-2.0-flash',
+    model: 'gemini-2.5-flash',
     generationConfig: {
         responseMimeType: 'text/plain',
         temperature: 0,
