@@ -996,6 +996,14 @@ type GuidedSaleMetadata = {
   inventoryMode?: 'SIMPLE' | 'VARIANT'
   candidateProducts?: Array<{ id: string; name: string }>
   candidateVariants?: Array<{ id: string; attribute: string; value: string }>
+  pendingVariantSelections?: Array<{
+    productId: string
+    productName: string
+    candidateVariants: Array<{ id: string; attribute: string; value: string }>
+    pendingTotalQty?: number | null
+    pendingPriceAmount?: number | null
+    pendingPriceScope?: 'unit' | 'total' | null
+  }>
   currentProductId?: string
   currentProductName?: string
   variantWizardIndex?: number | null
@@ -1932,6 +1940,31 @@ const getGuidedSaleState = (pending: PendingEvent): { data: GuidedSaleData; meta
           value: String(item.value ?? ''),
         }))
       : undefined,
+    pendingVariantSelections: Array.isArray(rawMeta.pendingVariantSelections)
+      ? (
+          rawMeta.pendingVariantSelections as Array<{
+            productId?: string
+            productName?: string
+            candidateVariants?: Array<{ id?: string; attribute?: string; value?: string }>
+            pendingTotalQty?: number | null
+            pendingPriceAmount?: number | null
+            pendingPriceScope?: string | null
+          }>
+        ).map((item) => ({
+          productId: String(item.productId ?? ''),
+          productName: String(item.productName ?? ''),
+          candidateVariants: Array.isArray(item.candidateVariants)
+            ? item.candidateVariants.map((variant) => ({
+                id: String(variant.id ?? ''),
+                attribute: String(variant.attribute ?? ''),
+                value: String(variant.value ?? ''),
+              }))
+            : [],
+          pendingTotalQty: typeof item.pendingTotalQty === 'number' ? item.pendingTotalQty : null,
+          pendingPriceAmount: typeof item.pendingPriceAmount === 'number' ? item.pendingPriceAmount : null,
+          pendingPriceScope: item.pendingPriceScope === 'unit' || item.pendingPriceScope === 'total' ? item.pendingPriceScope : null,
+        }))
+      : undefined,
     currentProductId: typeof rawMeta.currentProductId === 'string' ? rawMeta.currentProductId : undefined,
     currentProductName: typeof rawMeta.currentProductName === 'string' ? rawMeta.currentProductName : undefined,
     variantWizardIndex: typeof rawMeta.variantWizardIndex === 'number' ? rawMeta.variantWizardIndex : null,
@@ -2607,6 +2640,44 @@ const applyGuidedVariantSelection = async (
 
     return await advanceAfterItems(pendingId, chatId, data, meta, true)
   }
+
+  const nextPendingVariantSelection = meta.pendingVariantSelections?.shift()
+  if (nextPendingVariantSelection) {
+    meta.currentProductId = nextPendingVariantSelection.productId
+    meta.currentProductName = nextPendingVariantSelection.productName
+    meta.candidateVariants = nextPendingVariantSelection.candidateVariants
+    meta.pendingTotalQty = nextPendingVariantSelection.pendingTotalQty ?? null
+    meta.pendingPriceAmount = nextPendingVariantSelection.pendingPriceAmount ?? null
+    meta.pendingPriceScope = nextPendingVariantSelection.pendingPriceScope ?? null
+    meta.autoPriceApply = nextPendingVariantSelection.pendingPriceAmount ? true : undefined
+    meta.step = 'variants'
+    resetGuidedVariantWizard(meta, meta.candidateVariants.length)
+    await updateGuidedSaleState(pendingId, data, meta)
+
+    const autoQty = meta.pendingTotalQty && meta.pendingTotalQty > 0 ? Math.round(meta.pendingTotalQty) : 0
+    if (meta.candidateVariants.length === 1 && autoQty > 0) {
+      const only = meta.candidateVariants[0]
+      const variantLabel = `${only.attribute} ${only.value}`.trim()
+      await TelegramClient.sendMessage({
+        chatId,
+        text: `Detecte una sola variante (${variantLabel}) y asigne automaticamente la cantidad ${autoQty}.`,
+      })
+      return await applyGuidedVariantSelection(pendingId, chatId, data, meta, [
+        {
+          variantId: only.id,
+          attribute: only.attribute,
+          value: only.value,
+          qty: autoQty,
+          unitPrice: null,
+        },
+      ])
+    }
+
+    await askGuidedSaleVariants(chatId, meta.currentProductName, meta.candidateVariants, meta.pendingTotalQty ?? null)
+    return true
+  }
+
+  meta.pendingPriceProductIds = data.items.filter((item) => item.variants.some((variant) => !variant.unitPrice || variant.unitPrice <= 0)).map((item) => item.productId)
 
   if (data.unitPrice || data.totalAmount) {
     meta.step = 'price_apply_parsed'
@@ -3656,8 +3727,16 @@ const parseCompactSaleItems = (message: string): ParsedSaleItems | null => {
   if (!working) return null
 
   let customerName: string | null = null
+  const leadingCustomerMatch = working.match(
+    /^(?:a|para)\s+(.+?)\s+(?=\d+\s+[A-Za-z0-9][A-Za-z0-9\-_.\/]{1,}(?:\b|,|;|\n))/i,
+  )
+  if (leadingCustomerMatch && typeof leadingCustomerMatch.index === 'number') {
+    customerName = leadingCustomerMatch[1].trim()
+    working = working.slice(leadingCustomerMatch[0].length).trim()
+  }
+
   const customerMatch = working.match(/\b(?:esto\s+fue\s+a|fue\s+a|para|a)\s+([A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .'-]{1,})\s*$/i)
-  if (customerMatch && typeof customerMatch.index === 'number') {
+  if (!customerName && customerMatch && typeof customerMatch.index === 'number') {
     customerName = customerMatch[1].trim()
     working = working.slice(0, customerMatch.index).replace(/[,\s]+$/, '').trim()
   }
@@ -3757,6 +3836,7 @@ const startFastSaleFromText = async (chatId: number, companyId: string, rawText:
     totalAmount: null,
     items: [],
   }
+  const pendingVariantSelections: NonNullable<GuidedSaleMetadata['pendingVariantSelections']> = []
 
   for (const item of parsed.items) {
     const product = await resolveProductByName(companyId, item.productName)
@@ -3909,61 +3989,20 @@ const startFastSaleFromText = async (chatId: number, companyId: string, rawText:
             ? pendingTotalQty
             : parsed.items.length === 1 && explicitSaleQty
               ? explicitSaleQty
-              : null
-      const meta: GuidedSaleMetadata = {
-        step: 'variants',
-        inventoryMode,
-        currentProductId: product.id.toString(),
-        currentProductName: product.name,
+            : null
+      pendingVariantSelections.push({
+        productId: product.id.toString(),
+        productName: product.name,
         candidateVariants: activeVariants.map((variant) => ({
           id: variant.id.toString(),
           attribute: variant.attribute,
           value: variant.value,
         })),
-        variantWizardIndex: 0,
-        variantWizardValues: activeVariants.map(() => 0),
         pendingTotalQty: effectivePendingTotalQty,
         pendingPriceAmount,
         pendingPriceScope,
-        autoPriceApply: pendingPriceAmount ? true : undefined,
-      }
-
-      const created = await pendingEventRepository.create({
-        companyId,
-        telegramUserId: chatId,
-        eventType: 'sale_guided',
-        interpretedData: data as Record<string, unknown>,
-        metadata: meta as Record<string, unknown>,
-        status: 'PENDING_CONFIRMATION',
-        expiresAt,
       })
-
-      if (!meta.candidateVariants || meta.candidateVariants.length === 0) {
-        await TelegramClient.sendMessage({ chatId, text: 'No pude cargar las variantes para este producto.' })
-        return true
-      }
-
-      const autoQty = meta.pendingTotalQty && meta.pendingTotalQty > 0 ? Math.round(meta.pendingTotalQty) : 0
-      if (meta.candidateVariants.length === 1 && autoQty > 0) {
-        const only = meta.candidateVariants[0]
-        const variantLabel = `${only.attribute} ${only.value}`.trim()
-        await TelegramClient.sendMessage({
-          chatId,
-          text: `Detecte una sola variante (${variantLabel}) y asigne automaticamente la cantidad ${autoQty}.`,
-        })
-        return await applyGuidedVariantSelection(created.id, chatId, data, meta, [
-          {
-            variantId: only.id,
-            attribute: only.attribute,
-            value: only.value,
-            qty: autoQty,
-            unitPrice: null,
-          },
-        ])
-      }
-
-      await askGuidedSaleVariants(chatId, product.name, meta.candidateVariants, meta.pendingTotalQty ?? null)
-      return true
+      continue
     }
 
     if (variants.length > 0) {
@@ -3975,21 +4014,32 @@ const startFastSaleFromText = async (chatId: number, companyId: string, rawText:
     }
   }
 
-  if (data.items.length === 0) {
+  if (data.items.length === 0 && pendingVariantSelections.length === 0) {
     return false
   }
 
   const pendingPriceProductIds = data.items.filter((item) => item.variants.some((variant) => !variant.unitPrice || variant.unitPrice <= 0)).map((item) => item.productId)
 
   const forceAddMorePrompt = inventoryMode === 'SIMPLE'
+  const firstPendingVariantSelection = pendingVariantSelections.shift()
   const meta: GuidedSaleMetadata = {
-    step: 'confirm',
+    step: firstPendingVariantSelection ? 'variants' : 'confirm',
     inventoryMode,
     fastMode: forceAddMorePrompt ? undefined : true,
     pendingPriceProductIds,
+    pendingVariantSelections,
   }
 
-  if (pendingPriceProductIds.length > 0) {
+  if (firstPendingVariantSelection) {
+    meta.currentProductId = firstPendingVariantSelection.productId
+    meta.currentProductName = firstPendingVariantSelection.productName
+    meta.candidateVariants = firstPendingVariantSelection.candidateVariants
+    meta.pendingTotalQty = firstPendingVariantSelection.pendingTotalQty ?? null
+    meta.pendingPriceAmount = firstPendingVariantSelection.pendingPriceAmount ?? null
+    meta.pendingPriceScope = firstPendingVariantSelection.pendingPriceScope ?? null
+    meta.autoPriceApply = firstPendingVariantSelection.pendingPriceAmount ? true : undefined
+    resetGuidedVariantWizard(meta, meta.candidateVariants.length)
+  } else if (pendingPriceProductIds.length > 0) {
     const currentId = pendingPriceProductIds[0]
     const current = data.items.find((item) => item.productId === currentId)
     if (current) {
@@ -4029,6 +4079,35 @@ const startFastSaleFromText = async (chatId: number, companyId: string, rawText:
 
     data.downPaymentAmount = 0
     await sendGuidedSaleConfirmation(created.id, chatId, data, meta)
+    return true
+  }
+
+  if (meta.step === 'variants') {
+    if (!meta.candidateVariants || meta.candidateVariants.length === 0) {
+      await TelegramClient.sendMessage({ chatId, text: 'No pude cargar las variantes para este producto.' })
+      return true
+    }
+
+    const autoQty = meta.pendingTotalQty && meta.pendingTotalQty > 0 ? Math.round(meta.pendingTotalQty) : 0
+    if (meta.candidateVariants.length === 1 && autoQty > 0) {
+      const only = meta.candidateVariants[0]
+      const variantLabel = `${only.attribute} ${only.value}`.trim()
+      await TelegramClient.sendMessage({
+        chatId,
+        text: `Detecte una sola variante (${variantLabel}) y asigne automaticamente la cantidad ${autoQty}.`,
+      })
+      return await applyGuidedVariantSelection(created.id, chatId, data, meta, [
+        {
+          variantId: only.id,
+          attribute: only.attribute,
+          value: only.value,
+          qty: autoQty,
+          unitPrice: null,
+        },
+      ])
+    }
+
+    await askGuidedSaleVariants(chatId, meta.currentProductName ?? 'producto', meta.candidateVariants, meta.pendingTotalQty ?? null)
     return true
   }
 
