@@ -3,6 +3,7 @@ import type { Customer } from '../../domain/Customer'
 export interface CustomerRepository {
   findById(id: string): Promise<Customer | null>
   findByNormalizedName(companyId: string, normalizedName: string): Promise<Customer | null>
+  findByDocumentNumber(companyId: string, documentNumber: string): Promise<Customer | null>
   findByIds(ids: string[]): Promise<Customer[]>
   listByCompany(
     companyId: string,

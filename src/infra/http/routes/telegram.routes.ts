@@ -962,6 +962,7 @@ type GuidedSaleItem = {
 
 type GuidedSaleData = {
   saleId: string
+  customerId?: string | null
   customerName?: string | null
   paymentMethod?: string | null
   creditDueDate?: string | null
@@ -973,6 +974,7 @@ type GuidedSaleData = {
 }
 
 type GuidedSaleStep =
+  | 'customer_confirm'
   | 'customer'
   | 'product'
   | 'product_select'
@@ -996,6 +998,9 @@ type GuidedSaleMetadata = {
   inventoryMode?: 'SIMPLE' | 'VARIANT'
   candidateProducts?: Array<{ id: string; name: string }>
   candidateVariants?: Array<{ id: string; attribute: string; value: string }>
+  customerMatches?: Array<{ id: string; name: string; documentNumber?: string | null; phone?: string | null; city?: string | null; address?: string | null }>
+  customerInput?: string | null
+  afterCustomerStep?: GuidedSaleStep | null
   pendingVariantSelections?: Array<{
     productId: string
     productName: string
@@ -1773,6 +1778,91 @@ const createPendingEvent = async (params: {
   return pending
 }
 
+const customerToGuidedMatch = (customer: Customer) => ({
+  id: customer.id,
+  name: customer.name,
+  documentNumber: customer.documentNumber ?? null,
+  phone: customer.phone ?? null,
+  city: customer.city ?? null,
+  address: customer.address ?? null,
+})
+
+const formatGuidedCustomerDetected = (customer: Customer | NonNullable<GuidedSaleMetadata['customerMatches']>[number]) =>
+  [
+    'Cliente detectado y confirmado:',
+    `Nombre: ${customer.name}`,
+    `Cedula/NIT: ${formatOptionalText(customer.documentNumber ?? null)}`,
+    `Telefono: ${formatOptionalText(customer.phone ?? null)}`,
+    `Ciudad: ${formatOptionalText(customer.city ?? null)}`,
+    `Direccion: ${formatOptionalText(customer.address ?? null)}`,
+  ].join('\n')
+
+const isLikelyCustomerDocumentInput = (value: string): boolean => {
+  const cleaned = normalizeCustomerDocumentInput(value)
+  return /^\d{5,15}[-\dA-Za-z]*$/.test(cleaned)
+}
+
+const scoreCustomerNameMatch = (input: string, customer: Customer): number => {
+  const wanted = normalizeCustomerName(input)
+  const current = normalizeCustomerName(customer.name)
+  if (!wanted || !current) return 0
+  if (wanted === current) return 100
+  if (current.includes(wanted) || wanted.includes(current)) return 86
+
+  const wantedTokens = wanted.split(/\s+/).filter(Boolean)
+  const currentTokens = current.split(/\s+/).filter(Boolean)
+  if (wantedTokens.length === 0 || currentTokens.length === 0) return 0
+
+  const common = wantedTokens.filter((token) => currentTokens.includes(token)).length
+  const overlap = common / Math.max(wantedTokens.length, currentTokens.length)
+  const startsWithScore = wantedTokens.filter((token) => currentTokens.some((currentToken) => currentToken.startsWith(token) || token.startsWith(currentToken))).length
+  const partialOverlap = startsWithScore / Math.max(wantedTokens.length, currentTokens.length)
+  return Math.round(Math.max(overlap * 82, partialOverlap * 72))
+}
+
+const resolveGuidedSaleCustomer = async (
+  companyId: string,
+  rawInput?: string | null,
+): Promise<{ status: 'none' | 'confirmed' | 'ambiguous' | 'not_found'; customer?: Customer; matches: Customer[]; input: string | null }> => {
+  const input = rawInput?.trim() ?? ''
+  if (!input || normalizeText(input) === 'sin cliente') return { status: 'none', matches: [], input: input || null }
+
+  const documentNumber = normalizeCustomerDocumentInput(input)
+  if (isLikelyCustomerDocumentInput(input)) {
+    const byDocument = await arCustomerRepository.findByDocumentNumber(companyId, documentNumber)
+    if (byDocument) return { status: 'confirmed', customer: byDocument, matches: [], input }
+  }
+
+  const exact = await arCustomerRepository.findByNormalizedName(companyId, normalizeCustomerName(input))
+  if (exact) return { status: 'confirmed', customer: exact, matches: [], input }
+
+  const tokens = normalizeCustomerName(input).split(/\s+/).filter(Boolean)
+  const searchTerm = tokens[0] ?? input
+  let { items } = await arCustomerRepository.listByCompany(companyId, { search: searchTerm, limit: 80 })
+  if (items.length === 0 && tokens.length > 1) {
+    const fallback = await arCustomerRepository.listByCompany(companyId, { limit: 300 })
+    items = fallback.items
+  }
+  const scored = items
+    .map((customer) => ({ customer, score: scoreCustomerNameMatch(input, customer) }))
+    .filter((entry) => entry.score >= 45)
+    .sort((a, b) => b.score - a.score)
+
+  if (scored.length === 1 && scored[0].score >= 88) {
+    return { status: 'confirmed', customer: scored[0].customer, matches: [], input }
+  }
+
+  if (scored.length > 1 && scored[0].score >= 90 && scored[0].score - scored[1].score >= 12) {
+    return { status: 'confirmed', customer: scored[0].customer, matches: [], input }
+  }
+
+  if (scored.length > 0) {
+    return { status: 'ambiguous', matches: scored.slice(0, 5).map((entry) => entry.customer), input }
+  }
+
+  return { status: 'not_found', matches: [], input }
+}
+
 const getInvoiceSignatureMeta = (pending: PendingEvent): InvoiceSignatureMeta | null => {
   const raw = pending.metadata ?? {}
   const token = typeof raw.token === 'string' ? raw.token : ''
@@ -1900,6 +1990,7 @@ const getGuidedSaleState = (pending: PendingEvent): { data: GuidedSaleData; meta
 
   const data: GuidedSaleData = {
     saleId: typeof rawData.saleId === 'string' && rawData.saleId.trim() ? rawData.saleId : inventoryGateway.idGenerator(),
+    customerId: typeof rawData.customerId === 'string' ? rawData.customerId : null,
     customerName: typeof rawData.customerName === 'string' ? rawData.customerName : null,
     paymentMethod: typeof rawData.paymentMethod === 'string' ? rawData.paymentMethod : null,
     creditDueDate: typeof rawData.creditDueDate === 'string' ? rawData.creditDueDate : null,
@@ -1940,6 +2031,27 @@ const getGuidedSaleState = (pending: PendingEvent): { data: GuidedSaleData; meta
           value: String(item.value ?? ''),
         }))
       : undefined,
+    customerMatches: Array.isArray(rawMeta.customerMatches)
+      ? (
+          rawMeta.customerMatches as Array<{
+            id?: string
+            name?: string
+            documentNumber?: string | null
+            phone?: string | null
+            city?: string | null
+            address?: string | null
+          }>
+        ).map((item) => ({
+          id: String(item.id ?? ''),
+          name: String(item.name ?? ''),
+          documentNumber: typeof item.documentNumber === 'string' ? item.documentNumber : null,
+          phone: typeof item.phone === 'string' ? item.phone : null,
+          city: typeof item.city === 'string' ? item.city : null,
+          address: typeof item.address === 'string' ? item.address : null,
+        }))
+      : undefined,
+    customerInput: typeof rawMeta.customerInput === 'string' ? rawMeta.customerInput : null,
+    afterCustomerStep: typeof rawMeta.afterCustomerStep === 'string' ? (rawMeta.afterCustomerStep as GuidedSaleStep) : null,
     pendingVariantSelections: Array.isArray(rawMeta.pendingVariantSelections)
       ? (
           rawMeta.pendingVariantSelections as Array<{
@@ -2025,7 +2137,31 @@ const askGuidedSaleVariantQuantityStep = async (
 const askGuidedSaleCustomer = async (chatId: number) => {
   await TelegramClient.sendMessage({
     chatId,
-    text: '¿A quién le vendiste? (nombre del cliente) \nSi no hay cliente, escribe: "sin cliente".',
+    text: '¿A quién le vendiste? Escribe nombre exacto o número de cédula/NIT. Si no hay cliente, escribe: "sin cliente".',
+  })
+}
+
+const askGuidedSaleCustomerConfirmation = async (
+  chatId: number,
+  input: string | null,
+  matches: NonNullable<GuidedSaleMetadata['customerMatches']>,
+) => {
+  if (matches.length > 0) {
+    const lines = [`No confirme el cliente con seguridad para: ${formatOptionalText(input)}`, '', 'Opciones encontradas:']
+    matches.forEach((customer, index) => {
+      lines.push(`${index + 1}) ${customer.name} - Cedula/NIT: ${formatOptionalText(customer.documentNumber ?? null)}`)
+    })
+    lines.push('', 'Responde con el numero correcto, escribe la cedula/NIT, o escribe "sin cliente".')
+    await TelegramClient.sendMessage({ chatId, text: lines.join('\n') })
+    return
+  }
+
+  await TelegramClient.sendMessage({
+    chatId,
+    text:
+      `No encontre un cliente registrado para: ${formatOptionalText(input)}\n` +
+      'Escribe la cedula/NIT o el nombre exacto registrado. Si la venta va sin datos de cliente, escribe "sin cliente".\n' +
+      'Para crear un cliente nuevo primero usa "crear cliente" y luego registra la venta.',
   })
 }
 
@@ -2320,6 +2456,63 @@ const sendGuidedSaleConfirmation = async (pendingId: string, chatId: number, dat
     parseMode: 'Markdown',
     replyMarkup: buildConfirmCancelKeyboard(),
   })
+}
+
+const continueGuidedSaleAfterCustomerConfirmation = async (pendingId: string, chatId: number, data: GuidedSaleData, meta: GuidedSaleMetadata) => {
+  const nextStep = meta.afterCustomerStep && meta.afterCustomerStep !== 'customer_confirm' ? meta.afterCustomerStep : 'product'
+  meta.step = nextStep
+  meta.afterCustomerStep = null
+  meta.customerInput = null
+  meta.customerMatches = undefined
+  await updateGuidedSaleState(pendingId, data, meta)
+
+  if (nextStep === 'variants' && meta.currentProductName && meta.candidateVariants?.length) {
+    await askGuidedSaleVariants(chatId, meta.currentProductName, meta.candidateVariants, meta.pendingTotalQty ?? null)
+    return true
+  }
+
+  if (nextStep === 'quantity' && meta.currentProductName) {
+    await askGuidedSaleQuantity(chatId, meta.currentProductName, meta.pendingTotalQty ?? null)
+    return true
+  }
+
+  if (nextStep === 'price_mode') {
+    await askGuidedSalePrice(chatId, meta.currentProductName)
+    return true
+  }
+
+  if (nextStep === 'price_same') {
+    await askGuidedSalePriceValue(chatId, meta.currentProductName)
+    return true
+  }
+
+  if (nextStep === 'add_more') {
+    await askGuidedSaleAddMore(chatId)
+    return true
+  }
+
+  if (nextStep === 'payment') {
+    await askGuidedSalePayment(chatId)
+    return true
+  }
+
+  if (nextStep === 'credit_due') {
+    await askGuidedSaleCreditDueDate(chatId)
+    return true
+  }
+
+  if (nextStep === 'date') {
+    await askGuidedSaleDate(chatId)
+    return true
+  }
+
+  if (nextStep === 'confirm') {
+    await sendGuidedSaleConfirmation(pendingId, chatId, data, meta)
+    return true
+  }
+
+  await askGuidedSaleProduct(chatId)
+  return true
 }
 
 const parseVariantQuantities = (text: string, variants: Array<{ id: string; attribute: string; value: string }>): GuidedSaleVariant[] => {
@@ -3530,13 +3723,30 @@ const startGuidedSaleWithPrefill = async (chatId: number, saleInput: SaleEventIn
     meta.autoPriceApply = true
   }
 
-  await pendingEventRepository.create({
+  let customerId: string | null = null
+  let customerName = sanitizeParsedSaleCustomerName(saleInput.customerName ?? null)
+  let confirmedCustomer: Customer | null = null
+  const customerResolution = await resolveGuidedSaleCustomer(saleInput.companyId, customerName)
+  if (customerResolution.status === 'confirmed' && customerResolution.customer) {
+    confirmedCustomer = customerResolution.customer
+    customerId = confirmedCustomer.id
+    customerName = confirmedCustomer.name
+  } else if (customerResolution.status === 'ambiguous' || customerResolution.status === 'not_found') {
+    meta.afterCustomerStep = step
+    step = 'customer_confirm'
+    meta.step = 'customer_confirm'
+    meta.customerInput = customerResolution.input
+    meta.customerMatches = customerResolution.matches.map(customerToGuidedMatch)
+  }
+
+  const created = await pendingEventRepository.create({
     companyId: saleInput.companyId,
     telegramUserId: chatId,
     eventType: 'sale_guided',
     interpretedData: {
       saleId: inventoryGateway.idGenerator(),
-      customerName: saleInput.customerName ?? null,
+      customerId,
+      customerName,
       paymentMethod: saleInput.paymentMethod ?? null,
       date: saleInput.date ?? null,
       unitPrice: saleInput.unitPrice ?? null,
@@ -3547,6 +3757,15 @@ const startGuidedSaleWithPrefill = async (chatId: number, saleInput: SaleEventIn
     status: 'PENDING_CONFIRMATION',
     expiresAt,
   })
+
+  if (meta.step === 'customer_confirm') {
+    await askGuidedSaleCustomerConfirmation(chatId, meta.customerInput ?? customerName, meta.customerMatches ?? [])
+    return
+  }
+
+  if (confirmedCustomer) {
+    await TelegramClient.sendMessage({ chatId, text: formatGuidedCustomerDetected(confirmedCustomer) })
+  }
 
   if (meta.step === 'variants' && meta.currentProductName && meta.candidateVariants) {
     await askGuidedSaleVariants(chatId, meta.currentProductName, meta.candidateVariants, meta.pendingTotalQty ?? null)
@@ -3716,6 +3935,13 @@ const resolveVariantByValue = async (companyId: string, productId: string, attri
   return activeVariants.find((variant) => normalizeText(variant.value) === normalizedValue) ?? null
 }
 
+const sanitizeParsedSaleCustomerName = (value?: string | null): string | null => {
+  const cleaned = value?.trim()
+  if (!cleaned) return null
+  const withoutSeparator = cleaned.replace(/\s*,?\s+de\s*$/i, '').replace(/[,\s]+$/g, '').trim()
+  return withoutSeparator || null
+}
+
 const parseCompactSaleItems = (message: string): ParsedSaleItems | null => {
   const raw = message.trim()
   if (!raw) return null
@@ -3728,7 +3954,7 @@ const parseCompactSaleItems = (message: string): ParsedSaleItems | null => {
 
   let customerName: string | null = null
   const leadingCustomerMatch = working.match(
-    /^(?:a|para)\s+(.+?)\s+(?=\d+\s+[A-Za-z0-9][A-Za-z0-9\-_.\/]{1,}(?:\b|,|;|\n))/i,
+    /^(?:a|para)\s+(.+?)(?:\s*,?\s+de)?\s+(?=\d+\s+[A-Za-z0-9][A-Za-z0-9\-_.\/]{1,}(?:\b|,|;|\n))/i,
   )
   if (leadingCustomerMatch && typeof leadingCustomerMatch.index === 'number') {
     customerName = leadingCustomerMatch[1].trim()
@@ -3796,7 +4022,7 @@ const parseCompactSaleItems = (message: string): ParsedSaleItems | null => {
   const date = parseDateInput(raw)
 
   return {
-    customerName,
+    customerName: sanitizeParsedSaleCustomerName(customerName),
     paymentMethod,
     date,
     creditDueDate: null,
@@ -3828,7 +4054,7 @@ const startFastSaleFromText = async (chatId: number, companyId: string, rawText:
 
   const data: GuidedSaleData = {
     saleId: inventoryGateway.idGenerator(),
-    customerName: parsed.customerName,
+    customerName: sanitizeParsedSaleCustomerName(parsed.customerName),
     paymentMethod: parsed.paymentMethod,
     creditDueDate: parsed.creditDueDate,
     date: parsed.date,
@@ -4055,7 +4281,20 @@ const startFastSaleFromText = async (chatId: number, companyId: string, rawText:
   } else if (!data.paymentMethod) {
     meta.step = 'payment'
   } else if (!data.date) {
-    meta.step = 'date'
+      meta.step = 'date'
+  }
+
+  let confirmedCustomer: Customer | null = null
+  const customerResolution = await resolveGuidedSaleCustomer(companyId, data.customerName ?? null)
+  if (customerResolution.status === 'confirmed' && customerResolution.customer) {
+    confirmedCustomer = customerResolution.customer
+    data.customerId = confirmedCustomer.id
+    data.customerName = confirmedCustomer.name
+  } else if (customerResolution.status === 'ambiguous' || customerResolution.status === 'not_found') {
+    meta.afterCustomerStep = meta.step
+    meta.step = 'customer_confirm'
+    meta.customerInput = customerResolution.input
+    meta.customerMatches = customerResolution.matches.map(customerToGuidedMatch)
   }
 
   const expiresAt = new Date(Date.now() + PENDING_EXPIRATION_MINUTES * 60 * 1000)
@@ -4070,6 +4309,9 @@ const startFastSaleFromText = async (chatId: number, companyId: string, rawText:
   })
 
   if (meta.step === 'confirm') {
+    if (confirmedCustomer) {
+      await TelegramClient.sendMessage({ chatId, text: formatGuidedCustomerDetected(confirmedCustomer) })
+    }
     if (shouldCaptureGuidedDownPayment(data)) {
       meta.step = 'down_payment_confirm'
       await updateGuidedSaleState(created.id, data, meta)
@@ -4080,6 +4322,15 @@ const startFastSaleFromText = async (chatId: number, companyId: string, rawText:
     data.downPaymentAmount = 0
     await sendGuidedSaleConfirmation(created.id, chatId, data, meta)
     return true
+  }
+
+  if (meta.step === 'customer_confirm') {
+    await askGuidedSaleCustomerConfirmation(chatId, meta.customerInput ?? data.customerName ?? null, meta.customerMatches ?? [])
+    return true
+  }
+
+  if (confirmedCustomer) {
+    await TelegramClient.sendMessage({ chatId, text: formatGuidedCustomerDetected(confirmedCustomer) })
   }
 
   if (meta.step === 'variants') {
@@ -4232,10 +4483,63 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
 
   if (meta.step === 'customer') {
     const customerName = normalized.includes('sin cliente') ? null : text
-    data.customerName = customerName
-    meta.step = 'product'
+    if (!customerName) {
+      data.customerId = null
+      data.customerName = null
+      meta.step = 'product'
+      await updateGuidedSaleState(pending.id, data, meta)
+      await askGuidedSaleProduct(chatId)
+      return true
+    }
+
+    const customerResolution = await resolveGuidedSaleCustomer(pending.companyId, customerName)
+    if (customerResolution.status === 'confirmed' && customerResolution.customer) {
+      data.customerId = customerResolution.customer.id
+      data.customerName = customerResolution.customer.name
+      meta.step = 'product'
+      await updateGuidedSaleState(pending.id, data, meta)
+      await TelegramClient.sendMessage({ chatId, text: formatGuidedCustomerDetected(customerResolution.customer) })
+      await askGuidedSaleProduct(chatId)
+      return true
+    }
+
+    meta.step = 'customer_confirm'
+    meta.afterCustomerStep = 'product'
+    meta.customerInput = customerResolution.input ?? customerName
+    meta.customerMatches = customerResolution.matches.map(customerToGuidedMatch)
     await updateGuidedSaleState(pending.id, data, meta)
-    await askGuidedSaleProduct(chatId)
+    await askGuidedSaleCustomerConfirmation(chatId, meta.customerInput ?? customerName, meta.customerMatches ?? [])
+    return true
+  }
+
+  if (meta.step === 'customer_confirm') {
+    if (normalized.includes('sin cliente')) {
+      data.customerId = null
+      data.customerName = null
+      return await continueGuidedSaleAfterCustomerConfirmation(pending.id, chatId, data, meta)
+    }
+
+    const selectedIndex = Number(text)
+    const selected = Number.isFinite(selectedIndex) && selectedIndex > 0 ? meta.customerMatches?.[selectedIndex - 1] : null
+    if (selected) {
+      data.customerId = selected.id
+      data.customerName = selected.name
+      await TelegramClient.sendMessage({ chatId, text: formatGuidedCustomerDetected(selected) })
+      return await continueGuidedSaleAfterCustomerConfirmation(pending.id, chatId, data, meta)
+    }
+
+    const customerResolution = await resolveGuidedSaleCustomer(pending.companyId, text)
+    if (customerResolution.status === 'confirmed' && customerResolution.customer) {
+      data.customerId = customerResolution.customer.id
+      data.customerName = customerResolution.customer.name
+      await TelegramClient.sendMessage({ chatId, text: formatGuidedCustomerDetected(customerResolution.customer) })
+      return await continueGuidedSaleAfterCustomerConfirmation(pending.id, chatId, data, meta)
+    }
+
+    meta.customerInput = customerResolution.input ?? text
+    meta.customerMatches = customerResolution.matches.map(customerToGuidedMatch)
+    await updateGuidedSaleState(pending.id, data, meta)
+    await askGuidedSaleCustomerConfirmation(chatId, meta.customerInput ?? text, meta.customerMatches ?? [])
     return true
   }
 
@@ -5323,8 +5627,9 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
       })),
     )
 
-    const invoiceCustomer =
-      data.customerName?.trim() && data.customerName.trim().toLowerCase() !== 'sin cliente'
+    const invoiceCustomer = data.customerId
+      ? await arCustomerRepository.findById(data.customerId)
+      : data.customerName?.trim() && data.customerName.trim().toLowerCase() !== 'sin cliente'
         ? await arCustomerRepository.findByNormalizedName(pending.companyId, normalizeCustomerName(data.customerName))
         : null
 
@@ -5339,7 +5644,7 @@ const handleGuidedSaleMessage = async (pending: PendingEvent, chatId: number, ra
         companyTaxId: companySettings?.taxId ?? null,
         companyPhone: companySettings?.contactPhone ?? null,
         companyAddress: companySettings?.address ?? null,
-        customerName: data.customerName ?? null,
+        customerName: invoiceCustomer?.name ?? data.customerName ?? null,
         customerDocumentNumber: invoiceCustomer?.documentNumber ?? null,
         customerPhone: invoiceCustomer?.phone ?? null,
         customerCity: invoiceCustomer?.city ?? null,

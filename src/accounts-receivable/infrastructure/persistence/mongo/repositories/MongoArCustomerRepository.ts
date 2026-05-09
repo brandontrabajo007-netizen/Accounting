@@ -37,6 +37,20 @@ export class MongoArCustomerRepository implements CustomerRepository {
     return doc ? toDomain(doc) : null
   }
 
+  async findByDocumentNumber(companyId: string, documentNumber: string): Promise<Customer | null> {
+    const cleaned = documentNumber.trim()
+    if (!cleaned) return null
+    const flexiblePattern = cleaned
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      .split('')
+      .join('[\\s.\\-]*')
+    const doc = await ArCustomerMongoModel.findOne({
+      companyId,
+      $or: [{ documentNumber: cleaned }, { documentNumber: { $regex: `^${flexiblePattern}$`, $options: 'i' } }],
+    }).lean()
+    return doc ? toDomain(doc) : null
+  }
+
   async findByIds(ids: string[]): Promise<Customer[]> {
     if (ids.length === 0) return []
     const docs = await ArCustomerMongoModel.find({ _id: { $in: ids } }).lean()
@@ -54,7 +68,7 @@ export class MongoArCustomerRepository implements CustomerRepository {
     const filter: Record<string, unknown> = { companyId }
     if (params?.search?.trim()) {
       const term = params.search.trim()
-      filter.$or = [{ name: { $regex: term, $options: 'i' } }, { normalizedName: { $regex: term, $options: 'i' } }]
+      filter.$or = [{ name: { $regex: term, $options: 'i' } }, { normalizedName: { $regex: term, $options: 'i' } }, { documentNumber: { $regex: term, $options: 'i' } }]
     }
 
     const [docs, total] = await Promise.all([

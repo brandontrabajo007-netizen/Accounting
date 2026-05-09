@@ -22,6 +22,20 @@ class MongoArCustomerRepository {
         const doc = await ArCustomerModel_1.ArCustomerMongoModel.findOne({ companyId, normalizedName }).lean();
         return doc ? toDomain(doc) : null;
     }
+    async findByDocumentNumber(companyId, documentNumber) {
+        const cleaned = documentNumber.trim();
+        if (!cleaned)
+            return null;
+        const flexiblePattern = cleaned
+            .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+            .split('')
+            .join('[\\s.\\-]*');
+        const doc = await ArCustomerModel_1.ArCustomerMongoModel.findOne({
+            companyId,
+            $or: [{ documentNumber: cleaned }, { documentNumber: { $regex: `^${flexiblePattern}$`, $options: 'i' } }],
+        }).lean();
+        return doc ? toDomain(doc) : null;
+    }
     async findByIds(ids) {
         if (ids.length === 0)
             return [];
@@ -35,7 +49,7 @@ class MongoArCustomerRepository {
         const filter = { companyId };
         if (params?.search?.trim()) {
             const term = params.search.trim();
-            filter.$or = [{ name: { $regex: term, $options: 'i' } }, { normalizedName: { $regex: term, $options: 'i' } }];
+            filter.$or = [{ name: { $regex: term, $options: 'i' } }, { normalizedName: { $regex: term, $options: 'i' } }, { documentNumber: { $regex: term, $options: 'i' } }];
         }
         const [docs, total] = await Promise.all([
             ArCustomerModel_1.ArCustomerMongoModel.find(filter).sort({ name: 1, _id: 1 }).skip(skip).limit(limit).lean(),

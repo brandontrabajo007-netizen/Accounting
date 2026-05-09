@@ -26,6 +26,7 @@ const ArCustomerSchema = new Schema<ArCustomerDocument>(
 )
 
 ArCustomerSchema.index({ companyId: 1, normalizedName: 1 }, { unique: true })
+ArCustomerSchema.index({ companyId: 1, documentNumber: 1 })
 
 export const ArCustomerMongoModel: Model<ArCustomerDocument> =
   mongoose.models.ArCustomer ?? mongoose.model<ArCustomerDocument>('ArCustomer', ArCustomerSchema)

@@ -45,4 +45,5 @@ const ArCustomerSchema = new mongoose_1.Schema({
     address: { type: String },
 }, { timestamps: true });
 ArCustomerSchema.index({ companyId: 1, normalizedName: 1 }, { unique: true });
+ArCustomerSchema.index({ companyId: 1, documentNumber: 1 });
 exports.ArCustomerMongoModel = mongoose_1.default.models.ArCustomer ?? mongoose_1.default.model('ArCustomer', ArCustomerSchema);
