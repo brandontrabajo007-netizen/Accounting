@@ -40,5 +40,5 @@ export interface MovementRepo {
     productId: ProductId,
     snapshot: Readonly<{ name: string; sku: string }>,
   ): Promise<void>
-  existsByCompany(companyId: string): Promise<boolean>
+  existsForActiveProductsByCompany(companyId: string): Promise<boolean>
 }

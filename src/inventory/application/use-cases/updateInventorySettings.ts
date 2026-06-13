@@ -39,7 +39,7 @@ export function makeUpdateInventorySettings(
 
     if (command.mode === 'SIMPLE') {
       const [hasMovements, hasReservations, hasUserVariants] = await Promise.all([
-        deps.movementRepo.existsByCompany(command.companyId),
+        deps.movementRepo.existsForActiveProductsByCompany(command.companyId),
         deps.reservationRepo.existsByCompany(command.companyId),
         deps.variantRepo.existsUserManagedByCompany(command.companyId),
       ])

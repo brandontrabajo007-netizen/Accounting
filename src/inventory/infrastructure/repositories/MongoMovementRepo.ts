@@ -195,8 +195,14 @@ export class MongoMovementRepo implements MovementRepo {
     )
   }
 
-  async existsByCompany(companyId: string): Promise<boolean> {
-    const doc = await MovementModel.findOne({ companyId }).select({ _id: 1 }).lean().exec()
+  async existsForActiveProductsByCompany(companyId: string): Promise<boolean> {
+    const doc = await MovementModel.findOne({
+      companyId,
+      productDeleted: { $ne: true },
+    })
+      .select({ _id: 1 })
+      .lean()
+      .exec()
     return Boolean(doc)
   }
 }

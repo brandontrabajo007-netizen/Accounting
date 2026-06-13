@@ -150,8 +150,14 @@ class MongoMovementRepo {
             },
         });
     }
-    async existsByCompany(companyId) {
-        const doc = await MovementModel_1.MovementModel.findOne({ companyId }).select({ _id: 1 }).lean().exec();
+    async existsForActiveProductsByCompany(companyId) {
+        const doc = await MovementModel_1.MovementModel.findOne({
+            companyId,
+            productDeleted: { $ne: true },
+        })
+            .select({ _id: 1 })
+            .lean()
+            .exec();
         return Boolean(doc);
     }
 }
