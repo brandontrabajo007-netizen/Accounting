@@ -7,6 +7,7 @@ exports.arRoutes = void 0;
 const express_1 = __importDefault(require("express"));
 const auth_1 = require("../middleware/auth");
 const dependencies_1 = require("../dependencies");
+const normalizeCustomerName_1 = require("@accounts-receivable/domain/normalizeCustomerName");
 const router = express_1.default.Router();
 exports.arRoutes = router;
 const parseIntParam = (value, fallback) => {
@@ -157,6 +158,76 @@ router.get('/ar/customers/:customerId/statement', auth_1.authMiddleware, async (
             total: history.total,
             sort,
         });
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : 'Unexpected error';
+        return res.status(400).json({ status: false, error: message });
+    }
+});
+router.delete('/ar/customers/:customerId', auth_1.authMiddleware, async (req, res) => {
+    try {
+        if (!req.user)
+            return res.status(401).json({ status: false, error: 'No autenticado' });
+        const customerId = req.params.customerId;
+        const customer = await dependencies_1.arCustomerRepository.findById(customerId);
+        if (!customer || customer.companyId !== req.user.companyId) {
+            return res.status(404).json({ status: false, error: 'Cliente no encontrado' });
+        }
+        const balance = await dependencies_1.arEntryRepository.getBalanceByCustomer(req.user.companyId, customerId);
+        if (Math.abs(balance) > 0.0001) {
+            return res.status(409).json({
+                status: false,
+                error: 'No se puede eliminar este cliente porque tiene saldo pendiente.',
+                balance,
+            });
+        }
+        const [deletedEntries, deletedHistory, deletedCustomer] = await Promise.all([
+            dependencies_1.arEntryRepository.deleteByCustomer(req.user.companyId, customerId),
+            dependencies_1.customerHistoryRepository.deleteByCustomer(req.user.companyId, customerId),
+            dependencies_1.arCustomerRepository.deleteById(req.user.companyId, customerId),
+        ]);
+        if (!deletedCustomer) {
+            return res.status(404).json({ status: false, error: 'Cliente no encontrado' });
+        }
+        return res.json({
+            status: true,
+            deleted: {
+                customer: 1,
+                entries: deletedEntries,
+                history: deletedHistory,
+            },
+        });
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : 'Unexpected error';
+        return res.status(400).json({ status: false, error: message });
+    }
+});
+router.put('/ar/customers/:customerId', auth_1.authMiddleware, async (req, res) => {
+    try {
+        if (!req.user)
+            return res.status(401).json({ status: false, error: 'No autenticado' });
+        const customerId = req.params.customerId;
+        const customer = await dependencies_1.arCustomerRepository.findById(customerId);
+        if (!customer || customer.companyId !== req.user.companyId) {
+            return res.status(404).json({ status: false, error: 'Cliente no encontrado' });
+        }
+        const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+        if (!name) {
+            return res.status(400).json({ status: false, error: 'El nombre del cliente es obligatorio' });
+        }
+        const updated = await dependencies_1.arCustomerRepository.updateById(customerId, {
+            name,
+            normalizedName: (0, normalizeCustomerName_1.normalizeCustomerName)(name),
+            documentNumber: typeof req.body?.documentNumber === 'string' ? req.body.documentNumber : null,
+            phone: typeof req.body?.phone === 'string' ? req.body.phone : null,
+            city: typeof req.body?.city === 'string' ? req.body.city : null,
+            address: typeof req.body?.address === 'string' ? req.body.address : null,
+        });
+        if (!updated) {
+            return res.status(404).json({ status: false, error: 'Cliente no encontrado' });
+        }
+        return res.json({ status: true, customer: updated });
     }
     catch (error) {
         const message = error instanceof Error ? error.message : 'Unexpected error';

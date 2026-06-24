@@ -41,6 +41,7 @@ import { MongoApEntryRepository } from '@accounts-payable/infrastructure/persist
 import { MongoApSettingsRepository } from '@accounts-payable/infrastructure/persistence/mongo/repositories/MongoApSettingsRepository'
 import { MongoApSupplierRepository } from '@accounts-payable/infrastructure/persistence/mongo/repositories/MongoApSupplierRepository'
 import { ProductId } from '@inventory/domain/value-objects/ProductId'
+import { VariantId } from '@inventory/domain/value-objects/VariantId'
 import {
   confirmSale as inventoryConfirmSale,
   getInventorySettings as inventoryGetInventorySettings,
@@ -145,6 +146,10 @@ export const inventoryGateway = {
     inventoryVariantRepo.listByProductId(companyId, ProductId.from(productId)),
   getReservationById: (companyId: string, reservationId: string) =>
     inventoryReservationRepo.getById(companyId, reservationId),
+  listActiveReservedQtyByProduct: (companyId: string, productId: string) =>
+    inventoryReservationRepo.listActiveQtyByProduct(companyId, ProductId.from(productId)),
+  listActiveReservedQtyByVariant: (companyId: string, variantId: string) =>
+    inventoryReservationRepo.listActiveQtyByVariant(companyId, VariantId.from(variantId)),
   getProductById: (companyId: string, productId: string) =>
     inventoryProductRepo.getById(companyId, ProductId.from(productId)),
   findSaleMovements: (companyId: string, saleId: string) =>

@@ -1,6 +1,7 @@
 import express from 'express'
 import { authMiddleware } from '../middleware/auth'
 import { arCustomerRepository, arEntryRepository, arSettingsRepository, customerHistoryRepository } from '../dependencies'
+import { normalizeCustomerName } from '@accounts-receivable/domain/normalizeCustomerName'
 
 const router = express.Router()
 
@@ -168,6 +169,84 @@ router.get('/ar/customers/:customerId/statement', authMiddleware, async (req, re
       total: history.total,
       sort,
     })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unexpected error'
+    return res.status(400).json({ status: false, error: message })
+  }
+})
+
+router.delete('/ar/customers/:customerId', authMiddleware, async (req, res) => {
+  try {
+    if (!req.user) return res.status(401).json({ status: false, error: 'No autenticado' })
+
+    const customerId = req.params.customerId
+    const customer = await arCustomerRepository.findById(customerId)
+    if (!customer || customer.companyId !== req.user.companyId) {
+      return res.status(404).json({ status: false, error: 'Cliente no encontrado' })
+    }
+
+    const balance = await arEntryRepository.getBalanceByCustomer(req.user.companyId, customerId)
+    if (Math.abs(balance) > 0.0001) {
+      return res.status(409).json({
+        status: false,
+        error: 'No se puede eliminar este cliente porque tiene saldo pendiente.',
+        balance,
+      })
+    }
+
+    const [deletedEntries, deletedHistory, deletedCustomer] = await Promise.all([
+      arEntryRepository.deleteByCustomer(req.user.companyId, customerId),
+      customerHistoryRepository.deleteByCustomer(req.user.companyId, customerId),
+      arCustomerRepository.deleteById(req.user.companyId, customerId),
+    ])
+
+    if (!deletedCustomer) {
+      return res.status(404).json({ status: false, error: 'Cliente no encontrado' })
+    }
+
+    return res.json({
+      status: true,
+      deleted: {
+        customer: 1,
+        entries: deletedEntries,
+        history: deletedHistory,
+      },
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unexpected error'
+    return res.status(400).json({ status: false, error: message })
+  }
+})
+
+router.put('/ar/customers/:customerId', authMiddleware, async (req, res) => {
+  try {
+    if (!req.user) return res.status(401).json({ status: false, error: 'No autenticado' })
+
+    const customerId = req.params.customerId
+    const customer = await arCustomerRepository.findById(customerId)
+    if (!customer || customer.companyId !== req.user.companyId) {
+      return res.status(404).json({ status: false, error: 'Cliente no encontrado' })
+    }
+
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : ''
+    if (!name) {
+      return res.status(400).json({ status: false, error: 'El nombre del cliente es obligatorio' })
+    }
+
+    const updated = await arCustomerRepository.updateById(customerId, {
+      name,
+      normalizedName: normalizeCustomerName(name),
+      documentNumber: typeof req.body?.documentNumber === 'string' ? req.body.documentNumber : null,
+      phone: typeof req.body?.phone === 'string' ? req.body.phone : null,
+      city: typeof req.body?.city === 'string' ? req.body.city : null,
+      address: typeof req.body?.address === 'string' ? req.body.address : null,
+    })
+
+    if (!updated) {
+      return res.status(404).json({ status: false, error: 'Cliente no encontrado' })
+    }
+
+    return res.json({ status: true, customer: updated })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unexpected error'
     return res.status(400).json({ status: false, error: message })

@@ -59,4 +59,9 @@ export class MongoCustomerHistoryRepository implements CustomerHistoryRepository
 
     return { items: docs.map(toDomain), total }
   }
+
+  async deleteByCustomer(companyId: string, customerId: string): Promise<number> {
+    const result = await CustomerHistoryMongoModel.deleteMany({ companyId, customerId })
+    return result.deletedCount ?? 0
+  }
 }

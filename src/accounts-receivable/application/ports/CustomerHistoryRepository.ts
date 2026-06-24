@@ -7,4 +7,5 @@ export interface CustomerHistoryRepository {
     customerId: string,
     params?: { from?: Date; to?: Date; page?: number; limit?: number; sort?: 'asc' | 'desc' },
   ): Promise<{ items: CustomerHistoryEntry[]; total: number }>
+  deleteByCustomer(companyId: string, customerId: string): Promise<number>
 }

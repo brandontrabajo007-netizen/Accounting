@@ -121,4 +121,9 @@ export class MongoArCustomerRepository implements CustomerRepository {
     const doc = await ArCustomerMongoModel.findByIdAndUpdate(id, payload, { new: true }).lean()
     return doc ? toDomain(doc) : null
   }
+
+  async deleteById(companyId: string, id: string): Promise<boolean> {
+    const result = await ArCustomerMongoModel.deleteOne({ _id: id, companyId })
+    return result.deletedCount === 1
+  }
 }

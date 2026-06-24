@@ -38,5 +38,9 @@ class MongoCustomerHistoryRepository {
         ]);
         return { items: docs.map(toDomain), total };
     }
+    async deleteByCustomer(companyId, customerId) {
+        const result = await CustomerHistoryModel_1.CustomerHistoryMongoModel.deleteMany({ companyId, customerId });
+        return result.deletedCount ?? 0;
+    }
 }
 exports.MongoCustomerHistoryRepository = MongoCustomerHistoryRepository;

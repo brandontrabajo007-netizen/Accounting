@@ -21,6 +21,7 @@ const generateIncomeStatement_1 = require("@application/reports/use-cases/genera
 const AccountingPeriodStatus_1 = require("@domain/accounting-periods/AccountingPeriodStatus");
 const EventType_enum_1 = require("@domain/events/EventType.enum");
 const JournalEntryStatus_1 = require("@domain/journal-entries/JournalEntryStatus");
+const computeAvailableStock_1 = require("@inventory/domain/services/computeAvailableStock");
 const invoicePdfGenerator_1 = require("@infra/pdf/invoicePdfGenerator");
 const passwordReset_1 = require("@infra/security/passwordReset");
 const telegramAdapter_1 = require("@infra/telegram/telegramAdapter");
@@ -896,6 +897,77 @@ const isFastSaleCommand = (value) => {
 const isProductListCommand = (value) => {
     const text = normalizeText(value);
     return /\b(que productos tengo|que productos tienes|lista de productos|mis productos|productos disponibles)\b/.test(text);
+};
+const INVENTORY_QUERY_STOPWORDS = new Set([
+    'cuanto',
+    'cuanta',
+    'cuantos',
+    'cuantas',
+    'tengo',
+    'hay',
+    'en',
+    'de',
+    'del',
+    'la',
+    'el',
+    'los',
+    'las',
+    'un',
+    'una',
+    'unos',
+    'unas',
+    'total',
+    'stock',
+    'stok',
+    'inventario',
+    'prenda',
+    'prendas',
+    'unidades',
+    'unidad',
+    'disponible',
+    'disponibles',
+    'me',
+    'quedan',
+    'queda',
+    'que',
+    'tienes',
+    'productos',
+    'producto',
+    'poco',
+    'poca',
+    'poquito',
+    'poquita',
+    'bajo',
+    'baja',
+    'menos',
+    'minimo',
+    'minima',
+]);
+const parseInventoryStockQuery = (value) => {
+    const text = normalizeText(value);
+    const mentionsInventory = /\b(stock|stok|inventario|prendas?|unidades?|existencias?|disponibles?)\b/.test(text);
+    const asksQuantity = /\b(cuanto|cuanta|cuantos|cuantas|que hay|que tengo|me quedan|queda|tengo)\b/.test(text);
+    const asksLowStock = /\b(poco|poca|poquito|poquita|bajo|baja|agotad|menos de|minimo|minima)\b/.test(text);
+    const asksHowManyOwned = /\b(cuanto|cuanta|cuantos|cuantas)\b.*\b(tengo|quedan|queda)\b/.test(text) ||
+        /\b(tengo|quedan|queda)\b.*\b(cuanto|cuanta|cuantos|cuantas)\b/.test(text);
+    if (!mentionsInventory && !asksLowStock && !asksHowManyOwned)
+        return null;
+    if (!asksQuantity && !asksLowStock)
+        return null;
+    const thresholdMatch = text.match(/\b(?:menos de|menor a|bajo\s+de|por debajo de|minimo|minima)\s+(\d{1,4})\b/);
+    const threshold = thresholdMatch ? Number(thresholdMatch[1]) : 5;
+    const search = text
+        .replace(/\bmenos de\s+\d{1,4}\b/g, ' ')
+        .replace(/\bmenor a\s+\d{1,4}\b/g, ' ')
+        .replace(/\bbajo\s+de\s+\d{1,4}\b/g, ' ')
+        .replace(/\bpor debajo de\s+\d{1,4}\b/g, ' ')
+        .split(/[\s,.;:!?]+/)
+        .map((token) => token.trim())
+        .filter((token) => token && !INVENTORY_QUERY_STOPWORDS.has(token) && !/^\d+$/.test(token))
+        .join(' ');
+    return asksLowStock
+        ? { type: 'low_stock', threshold: Number.isFinite(threshold) && threshold >= 0 ? threshold : 5, search: search || null }
+        : { type: 'summary', search: search || null };
 };
 const parseMoney = (value) => {
     const match = value.match(/\d[\d.,]*/);
@@ -3231,6 +3303,142 @@ const resolveVariantByValue = async (companyId, productId, attribute, value) => 
     }
     return activeVariants.find((variant) => normalizeText(variant.value) === normalizedValue) ?? null;
 };
+const buildInventorySearchTokens = (value) => normalizeText(value)
+    .split(/[\s,.;:!?]+/)
+    .map((token) => {
+    let normalized = token.replace(/[^a-z0-9]/g, '');
+    if (normalized.endsWith('es') && normalized.length > 3)
+        normalized = normalized.slice(0, -2);
+    if (normalized.endsWith('s') && normalized.length > 3)
+        normalized = normalized.slice(0, -1);
+    return normalized;
+})
+    .filter((token) => token && !INVENTORY_QUERY_STOPWORDS.has(token));
+const rowMatchesInventorySearch = (row, search) => {
+    if (!search?.trim())
+        return true;
+    const tokens = buildInventorySearchTokens(search);
+    if (tokens.length === 0)
+        return true;
+    const haystack = buildInventorySearchTokens(`${row.productName} ${row.variantLabel}`).join(' ');
+    return tokens.every((token) => haystack.includes(token));
+};
+const getInventoryStockRows = async (companyId) => {
+    const mode = await dependencies_1.inventoryGateway.getInventoryMode(companyId);
+    const products = await listAllActiveProducts(companyId);
+    const rows = [];
+    for (const product of products) {
+        if (mode === 'SIMPLE') {
+            const movements = await dependencies_1.inventoryGateway.listMovements({
+                companyId,
+                productId: product.id,
+                page: 1,
+                pageSize: 10000,
+            });
+            const reservedQty = await dependencies_1.inventoryGateway.listActiveReservedQtyByProduct(companyId, product.id.toString());
+            const stock = (0, computeAvailableStock_1.computeAvailableStock)(movements.items, reservedQty);
+            rows.push({
+                productId: product.id.toString(),
+                productName: product.name,
+                variantId: product.id.toString(),
+                variantLabel: 'General',
+                availableQty: stock.availableQty,
+                reservedQty: stock.reservedQty,
+            });
+            continue;
+        }
+        const variants = await dependencies_1.inventoryGateway.listVariantsByProductId(companyId, product.id.toString());
+        for (const variant of variants.filter((entry) => entry.active && entry.systemType !== 'SIMPLE_DEFAULT')) {
+            const movements = await dependencies_1.inventoryGateway.listMovements({
+                companyId,
+                productId: product.id,
+                variantId: variant.id,
+                page: 1,
+                pageSize: 10000,
+            });
+            const reservedQty = await dependencies_1.inventoryGateway.listActiveReservedQtyByVariant(companyId, variant.id.toString());
+            const stock = (0, computeAvailableStock_1.computeAvailableStock)(movements.items, reservedQty);
+            rows.push({
+                productId: product.id.toString(),
+                productName: product.name,
+                variantId: variant.id.toString(),
+                variantLabel: `${variant.attribute} ${variant.value}`.trim(),
+                availableQty: stock.availableQty,
+                reservedQty: stock.reservedQty,
+            });
+        }
+    }
+    return rows;
+};
+const sendInventoryStockMessage = async (chatId, companyId, query) => {
+    const rows = await getInventoryStockRows(companyId);
+    const matchingRows = rows.filter((row) => rowMatchesInventorySearch(row, query.search));
+    const totalAvailable = matchingRows.reduce((sum, row) => sum + row.availableQty, 0);
+    const totalReserved = matchingRows.reduce((sum, row) => sum + row.reservedQty, 0);
+    if (matchingRows.length === 0) {
+        await telegramClient_1.TelegramClient.sendMessage({
+            chatId,
+            text: query.search ? `No encontre inventario para "${query.search}".` : 'No encontre inventario activo.',
+        });
+        return;
+    }
+    if (query.type === 'low_stock') {
+        const lowRows = matchingRows
+            .filter((row) => row.availableQty <= query.threshold)
+            .sort((a, b) => a.availableQty - b.availableQty || a.productName.localeCompare(b.productName))
+            .slice(0, 20);
+        if (lowRows.length === 0) {
+            await telegramClient_1.TelegramClient.sendMessage({
+                chatId,
+                text: query.search
+                    ? `No hay inventario bajo para "${query.search}" con ${query.threshold} unidades o menos.`
+                    : `No hay productos con ${query.threshold} unidades o menos.`,
+            });
+            return;
+        }
+        const lines = lowRows.map((row) => {
+            const label = row.variantLabel === 'General' ? row.productName : `${row.productName} (${row.variantLabel})`;
+            const reserved = row.reservedQty > 0 ? `, reservado ${row.reservedQty}` : '';
+            return `- ${label}: ${row.availableQty} disponibles${reserved}`;
+        });
+        await telegramClient_1.TelegramClient.sendMessage({
+            chatId,
+            text: `Inventario bajo (${query.threshold} o menos):\n${lines.join('\n')}`,
+        });
+        return;
+    }
+    const grouped = new Map();
+    for (const row of matchingRows) {
+        const current = grouped.get(row.productId) ?? { productName: row.productName, availableQty: 0, reservedQty: 0, rows: [] };
+        current.availableQty += row.availableQty;
+        current.reservedQty += row.reservedQty;
+        current.rows.push(row);
+        grouped.set(row.productId, current);
+    }
+    const products = Array.from(grouped.values()).sort((a, b) => b.availableQty - a.availableQty || a.productName.localeCompare(b.productName));
+    const visible = products.slice(0, 12);
+    const hidden = Math.max(products.length - visible.length, 0);
+    const detailLines = visible.map((item) => {
+        const reserved = item.reservedQty > 0 ? `, reservado ${item.reservedQty}` : '';
+        if (item.rows.length === 1 || !query.search)
+            return `- ${item.productName}: ${item.availableQty} disponibles${reserved}`;
+        const variantText = item.rows
+            .sort((a, b) => b.availableQty - a.availableQty)
+            .slice(0, 5)
+            .map((row) => `${row.variantLabel}: ${row.availableQty}`)
+            .join(', ');
+        return `- ${item.productName}: ${item.availableQty} disponibles (${variantText})${reserved}`;
+    });
+    const title = query.search ? `Inventario para "${query.search}"` : 'Inventario total';
+    await telegramClient_1.TelegramClient.sendMessage({
+        chatId,
+        text: `${title}\n\n` +
+            `Total disponible: ${totalAvailable} unidades\n` +
+            `Reservado: ${totalReserved} unidades\n` +
+            `Productos encontrados: ${products.length}\n\n` +
+            `${detailLines.join('\n')}${hidden > 0 ? `\n- ... y ${hidden} producto(s) mas` : ''}`,
+    });
+};
 const sanitizeParsedSaleCustomerName = (value) => {
     const cleaned = value?.trim();
     if (!cleaned)
@@ -5417,6 +5625,27 @@ router.post('/webhook', async (req, res) => {
                         return res.status(200).json({ ok: true });
                     }
                     await startGuidedCustomer(chatId, user.companyId, parsedCustomer);
+                    return res.status(200).json({ ok: true });
+                }
+            }
+            if (textForCommand) {
+                const inventoryQuery = parseInventoryStockQuery(textForCommand);
+                if (inventoryQuery) {
+                    const user = await dependencies_1.userRepository.findByTelegramId(chatId);
+                    if (!user) {
+                        await telegramClient_1.TelegramClient.sendMessage({
+                            chatId,
+                            text: `No tienes un usuario asignado. Envia este ID a soporte: ${chatId}`,
+                        });
+                        return res.status(200).json({ ok: true });
+                    }
+                    try {
+                        await sendInventoryStockMessage(chatId, user.companyId, inventoryQuery);
+                    }
+                    catch (err) {
+                        const message = err instanceof Error ? err.message : 'Error interno consultando inventario';
+                        await telegramClient_1.TelegramClient.sendMessage({ chatId, text: `No pude consultar inventario: ${message}` });
+                    }
                     return res.status(200).json({ ok: true });
                 }
             }

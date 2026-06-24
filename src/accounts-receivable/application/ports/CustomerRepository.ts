@@ -29,4 +29,5 @@ export interface CustomerRepository {
       address?: string | null
     },
   ): Promise<Customer | null>
+  deleteById(companyId: string, id: string): Promise<boolean>
 }

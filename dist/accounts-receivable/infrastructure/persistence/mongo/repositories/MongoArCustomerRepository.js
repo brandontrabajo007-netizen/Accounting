@@ -86,5 +86,9 @@ class MongoArCustomerRepository {
         const doc = await ArCustomerModel_1.ArCustomerMongoModel.findByIdAndUpdate(id, payload, { new: true }).lean();
         return doc ? toDomain(doc) : null;
     }
+    async deleteById(companyId, id) {
+        const result = await ArCustomerModel_1.ArCustomerMongoModel.deleteOne({ _id: id, companyId });
+        return result.deletedCount === 1;
+    }
 }
 exports.MongoArCustomerRepository = MongoArCustomerRepository;

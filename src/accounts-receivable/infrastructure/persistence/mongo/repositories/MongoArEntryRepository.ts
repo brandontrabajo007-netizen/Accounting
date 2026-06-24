@@ -73,4 +73,9 @@ export class MongoArEntryRepository implements ArEntryRepository {
 
     return row?.balance ?? 0
   }
+
+  async deleteByCustomer(companyId: string, customerId: string): Promise<number> {
+    const result = await ArEntryMongoModel.deleteMany({ companyId, customerId })
+    return result.deletedCount ?? 0
+  }
 }

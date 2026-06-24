@@ -98,6 +98,42 @@ const parseSpanishDate = (raw: string): Date | null => {
   return Number.isNaN(date.getTime()) ? null : date
 }
 
+const parseNumericDate = (raw: string): Date | null => {
+  const match = raw.match(/\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{4}))?\b/)
+  if (!match) return null
+
+  const year = match[3] ? Number(match[3]) : getBogotaTodayUtc().getUTCFullYear()
+  const date = new Date(Date.UTC(year, Number(match[2]) - 1, Number(match[1])))
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+const parsePaymentDateFromText = (rawText: string): string => {
+  const text = rawText.toLowerCase()
+  const today = getBogotaTodayUtc()
+
+  if (/\bhoy\b/.test(text)) return toDateString(today)
+
+  if (/\bayer\b|\banoche\b/.test(text)) {
+    const d = new Date(today)
+    d.setUTCDate(d.getUTCDate() - 1)
+    return toDateString(d)
+  }
+
+  if (/\bmanana\b|\bma\u00f1ana\b/.test(text)) {
+    const d = new Date(today)
+    d.setUTCDate(d.getUTCDate() + 1)
+    return toDateString(d)
+  }
+
+  const explicitDateMatch = text.match(/\b(?:el\s+)?(?:(?:dia|d\u00eda)\s+)?(\d{1,2}\s+de\s+[a-zA-ZÃ¡Ã©Ã­Ã³ÃºÃ±]+(?:\s+de\s+\d{4})?|\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}(?:[/-]\d{4})?)\b/)
+  if (explicitDateMatch) {
+    const date = parseSpanishDate(explicitDateMatch[1]) ?? parseNumericDate(explicitDateMatch[1])
+    if (date) return toDateString(date)
+  }
+
+  return toDateString(today)
+}
+
 const toPositiveInt = (value: unknown): number | null => {
   const raw = typeof value === 'number' ? value : typeof value === 'string' ? Number(value.trim()) : NaN
   if (!Number.isFinite(raw)) return null
@@ -358,6 +394,7 @@ export const TelegramAdapter = {
     if (!payment) return null
 
     applyCurrentYearIfMissing(text, payment)
+    payment.date = parsePaymentDateFromText(text)
     payment.companyId = user.companyId
 
     return { chatId, paymentInput: payment }
@@ -385,6 +422,7 @@ export const TelegramAdapter = {
     if (!payment) return null
 
     applyCurrentYearIfMissing(text, payment)
+    payment.date = parsePaymentDateFromText(text)
     payment.companyId = user.companyId
 
     return { chatId, paymentInput: payment }

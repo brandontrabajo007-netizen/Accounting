@@ -41,6 +41,7 @@ const MongoApEntryRepository_1 = require("@accounts-payable/infrastructure/persi
 const MongoApSettingsRepository_1 = require("@accounts-payable/infrastructure/persistence/mongo/repositories/MongoApSettingsRepository");
 const MongoApSupplierRepository_1 = require("@accounts-payable/infrastructure/persistence/mongo/repositories/MongoApSupplierRepository");
 const ProductId_1 = require("@inventory/domain/value-objects/ProductId");
+const VariantId_1 = require("@inventory/domain/value-objects/VariantId");
 const dependencies_1 = require("@inventory/infrastructure/http/dependencies");
 // Supplier history
 const MongoSupplierHistoryRepository_1 = require("@supplier-history/infrastructure/persistence/mongo/repositories/MongoSupplierHistoryRepository");
@@ -123,6 +124,8 @@ exports.inventoryGateway = {
     listMovements: (input) => dependencies_1.movementRepo.list(input),
     listVariantsByProductId: (companyId, productId) => dependencies_1.variantRepo.listByProductId(companyId, ProductId_1.ProductId.from(productId)),
     getReservationById: (companyId, reservationId) => dependencies_1.reservationRepo.getById(companyId, reservationId),
+    listActiveReservedQtyByProduct: (companyId, productId) => dependencies_1.reservationRepo.listActiveQtyByProduct(companyId, ProductId_1.ProductId.from(productId)),
+    listActiveReservedQtyByVariant: (companyId, variantId) => dependencies_1.reservationRepo.listActiveQtyByVariant(companyId, VariantId_1.VariantId.from(variantId)),
     getProductById: (companyId, productId) => dependencies_1.productRepo.getById(companyId, ProductId_1.ProductId.from(productId)),
     findSaleMovements: (companyId, saleId) => dependencies_1.movementRepo.findByReference(companyId, 'SALE', saleId),
     getSaleCost: dependencies_1.getSaleCost,

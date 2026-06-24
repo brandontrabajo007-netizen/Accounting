@@ -56,5 +56,9 @@ class MongoArEntryRepository {
         ]);
         return row?.balance ?? 0;
     }
+    async deleteByCustomer(companyId, customerId) {
+        const result = await ArEntryModel_1.ArEntryMongoModel.deleteMany({ companyId, customerId });
+        return result.deletedCount ?? 0;
+    }
 }
 exports.MongoArEntryRepository = MongoArEntryRepository;

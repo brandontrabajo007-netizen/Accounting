@@ -10,4 +10,5 @@ export interface ArEntryRepository {
   listByCustomer(companyId: string, customerId: string): Promise<ArEntry[]>
   listBalancesByCompany(companyId: string): Promise<ArCustomerBalance[]>
   getBalanceByCustomer(companyId: string, customerId: string): Promise<number>
+  deleteByCustomer(companyId: string, customerId: string): Promise<number>
 }
